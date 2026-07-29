@@ -46,6 +46,20 @@ securitygroup:
   enable_anti_spoofing_rules: False
 
 ovsOnHost: true
+
+# Provider-bridge takeover on the primary NIC. With ovsOnHost=false the
+# in-pod ovs-vswitchd sidecar performs it (files/start-ovs-vswitchd.py);
+# with ovsOnHost=true the configure-host-ovs init container performs it
+# (templates/bin/_configure-host-ovs.tpl). Leave false where the host
+# already provides a bridged uplink.
+ovs:
+  # Attach publicInterface to physicalBridge and move the host's primary
+  # IPv4 onto the bridge. Only enable on NICs intended for instance traffic.
+  physicalBridgeTakeover: false
+  # Empty = auto-detect: bond0 if present, else the default-route interface.
+  publicInterface: ""
+  physicalBridge: br-ovs0
+
 agent:
   rootwrap_daemon: false
 osprofiler: {}

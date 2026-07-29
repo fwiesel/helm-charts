@@ -10,10 +10,18 @@ data:
   start-ovsdb-server: |
     {{- include (print .Template.BasePath "/bin/_start-ovsdb-server.tpl") . | nindent 4 }}
   start-ovs-vswitchd: |
-    {{- include (print .Template.BasePath "/bin/_start-ovs-vswitchd.tpl") . | nindent 4 }}
+    {{- .Files.Get "files/start-ovs-vswitchd.py" | nindent 4 }}
+  preStop-ovs-vswitchd: |
+    {{- .Files.Get "files/preStop-ovs-vswitchd.sh" | nindent 4 }}
   ovn_controller_liveness.sh: |
     {{- include (print .Template.BasePath "/bin/_ovn_controller_liveness.sh.tpl") . | nindent 4 }}
   ovn_controller_readiness.sh: |
     {{- include (print .Template.BasePath "/bin/_ovn_controller_readiness.sh.tpl") . | nindent 4 }}
   init.sh: |
     {{- include (print .Template.BasePath "/bin/_init.sh.tpl") . | nindent 4 }}
+{{- if .Values.ovsOnHost }}
+  # Gated on ovsOnHost so the container-mode ConfigMap (and therefore the
+  # DaemonSet's configmap-bin-hash) stays byte-identical.
+  configure-host-ovs: |
+    {{- include (print .Template.BasePath "/bin/_configure-host-ovs.tpl") . | nindent 4 }}
+{{- end }}

@@ -15,4 +15,4 @@ data:
 {{ include (print .Template.BasePath "/bin/_manila_api.sh.tpl") . | indent 4 }}
 {{- end }}
   common.sh: |
-{{ include "common.sh" .| indent 4 }}
+{{ include "common.sh" . | trim | indent 4 }}
