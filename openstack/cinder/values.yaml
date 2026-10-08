@@ -87,6 +87,11 @@ cinderApiPortPublic: 443
 cinderApiPortInternal: 8776
 cinderApiPortAdmin: 8776
 
+default_volume_type: default
+quota_volumes: -1
+quota_snapshots: -1
+quota_gigabytes: -1
+
 defaults:
   backends:
     common: {}

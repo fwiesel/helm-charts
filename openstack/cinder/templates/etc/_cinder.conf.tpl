@@ -17,7 +17,7 @@ os_region_name = {{.Values.global.region}}
 public_endpoint = https://{{include "cinder_api_endpoint_host_public" .}}:{{.Values.cinderApiPortPublic}}
 
 default_availability_zone = {{.Values.global.default_availability_zone}}
-default_volume_type = vmware
+default_volume_type = {{ .Values.default_volume_type }}
 
 {{- template "utils.snippets.debug.eventlet_backdoor_ini" "cinder" }}
 
@@ -35,10 +35,9 @@ osapi_volume_workers = {{ .Values.osapi_volume_workers | default .Values.api.wor
 wsgi_default_pool_size = {{ .Values.wsgi_default_pool_size | default .Values.global.wsgi_default_pool_size | default 100 }}
 {{- end }}
 
-# all default quotas are 0 to enforce usage of the Resource Management tool in Elektra
-quota_volumes = 0
-quota_snapshots = 0
-quota_gigabytes = 0
+quota_volumes = {{ .Values.quota_volumes }}
+quota_snapshots = {{ .Values.quota_snapshots }}
+quota_gigabytes = {{ .Values.quota_gigabytes }}
 quota_backups = -1
 quota_backup_gigabytes = -1
 

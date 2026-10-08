@@ -17,10 +17,10 @@ data:
   policy.yaml: |
 {{ include (print .Template.BasePath "/etc/_glance-policy.yaml.tpl") . | indent 4 }}
   logging.ini: |
-{{ include "loggerIni" .Values.logging | indent 4 }}
+{{ include "loggerIni" .Values.logging | trim | indent 4 }}
 {{- if and .Values.swift.enabled (not .Values.swift.multi_tenant)}}
   swift-store.conf: |
-{{ include (print .Template.BasePath "/etc/_swift-store.conf.tpl") . | indent 4 }}
+{{ include (print .Template.BasePath "/etc/_swift-store.conf.tpl") . | trim | indent 4 }}
 {{- end }}
 {{- if .Values.watcher.enabled }}
   watcher.yaml: |

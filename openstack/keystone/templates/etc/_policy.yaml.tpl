@@ -969,7 +969,7 @@
 # Intended scope(s): system, domain
 #"identity:delete_project": "(role:admin and system_scope:all) or (role:admin and domain_id:%(target.project.domain_id)s)"
 # The corresponding `prodel` service details are available on GitHub under `cc/prodel`
-"identity:delete_project": "(rule:cloud_admin or (rule:admin_required and (project_id:%(project_id)s or project_id:%(target.project.parent_id)s))) and ({{- if .Values.tempest.enabled }}project_id:{{.Values.tempest.adminProjectId}} or {{ end }}{{ include "prodel_url" $ }})"
+"identity:delete_project": "rule:cloud_admin or role:admin"
 
 # List tags for a project.
 # GET  /v3/projects/{project_id}/tags
@@ -1397,16 +1397,16 @@
 # POST  /v3/users
 # Intended scope(s): system, domain
 #"identity:create_user": "(role:admin and system_scope:all) or (role:admin and token.domain.id:%(target.user.domain_id)s)"
-"identity:create_user": "rule:cloud_admin or (role:admin and token.domain.id:%(target.user.domain_id)s)"
+"identity:create_user": "rule:cloud_admin or role:admin"
 
 # Update a user, including administrative password resets.
 # PATCH  /v3/users/{user_id}
 # Intended scope(s): system, domain
 #"identity:update_user": "(role:admin and system_scope:all) or (role:admin and token.domain.id:%(target.user.domain_id)s)"
-"identity:update_user": "rule:cloud_admin or (role:admin and token.domain.id:%(target.user.domain_id)s)"
+"identity:update_user": "rule:cloud_admin or role:admin"
 
 # Delete a user.
 # DELETE  /v3/users/{user_id}
 # Intended scope(s): system, domain
 #"identity:delete_user": "(role:admin and system_scope:all) or (role:admin and token.domain.id:%(target.user.domain_id)s)"
-"identity:delete_user": "rule:cloud_admin"
+"identity:delete_user": "rule:cloud_admin or role:admin"

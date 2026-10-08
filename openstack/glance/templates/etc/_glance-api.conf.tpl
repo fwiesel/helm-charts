@@ -2,6 +2,9 @@
 
 {{- /* Build the backends list based on enabled values */ -}}
 {{- $backends := list -}}
+{{- if .Values.file.enabled -}}
+  {{- $backends = append $backends "file:file" -}}
+{{- end -}}
 {{- if .Values.swift.enabled -}}
   {{- $backends = append $backends "swift:swift" -}}
 {{- end -}}
@@ -35,6 +38,10 @@
 {{- end }}
 
 enabled_backends = {{ join ", " $backends }}
+
+{{- if .Values.public_endpoint }}
+public_endpoint = {{ .Values.public_endpoint }}
+{{- end }}
 
 debug = {{ .Values.api.debug }}
 
@@ -90,7 +97,10 @@ default_backend = {{ $def | quote }}
 require_image_format_match = false
 vmdk_allowed_types = streamOptimized
 
-{{- if .Values.file.persistence.enabled }}
+{{- if .Values.file.enabled }}
+
+[file]
+store_description = "Filesystem storage backend"
 filesystem_store_datadir = /glance_store
 {{- end }}
 

@@ -5,10 +5,10 @@
 "context_is_viewer": "rule:context_is_editor or role:image_viewer"
 "default": "rule:context_is_admin"
 "add_image": "rule:context_is_editor"
-"delete_image": "rule:context_is_image_admin"
+"delete_image": "rule:context_is_editor"
 "get_image": "rule:context_is_viewer"
 "get_images": "rule:context_is_viewer"
-"modify_image": "rule:context_is_image_admin"
+"modify_image": "rule:context_is_editor"
 "publicize_image": "rule:context_is_cloud_admin or role:image_publicize_admin"
 "communitize_image": "rule:context_is_editor"
 
