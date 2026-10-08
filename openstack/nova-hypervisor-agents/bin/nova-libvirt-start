@@ -4,12 +4,6 @@ set -e
 . /container.init/common.sh
 
 function start_application {
-    # Wait for OVS DB startup
-    while [ ! -S /var/run/openvswitch/db.sock ]
-    do
-      sleep 2
-    done
-
     if [ ! -e /dev/kvm ]; then
        set +e
        mknod /dev/kvm c 10 $(grep '\<kvm\>' /proc/misc | cut -f 1 -d' ')
@@ -21,6 +15,9 @@ function start_application {
     chmod 660 /dev/kvm
 
     mount -o remount,rw /sys
+
+    groupmod -g 42436 nova 2>/dev/null || groupadd -g 42436 nova 2>/dev/null || true
+    usermod -u 42436 -g 42436 nova 2>/dev/null || useradd -u 42436 -g 42436 -s /bin/false -d /var/lib/nova nova 2>/dev/null || true
 
     exec /usr/sbin/libvirtd --listen
 }

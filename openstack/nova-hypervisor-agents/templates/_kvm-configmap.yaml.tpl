@@ -15,9 +15,11 @@ data:
     listen_tls = 0
     mdns_adv = 0
     auth_tcp = "none"
+    auth_unix_ro = "none"
+    auth_unix_rw = "none"
     ca_file = ""
     log_level = 3
     log_outputs = "3:stderr"
     listen_addr = "127.0.0.1"
-    live_migration_inbound_addr = $my_ip
+    live_migration_inbound_addr = "127.0.0.1"
 {{- end }}
