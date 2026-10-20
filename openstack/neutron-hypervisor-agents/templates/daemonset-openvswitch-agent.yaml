@@ -112,6 +112,8 @@ spec:
           volumeMounts:
           - mountPath: /run
             name: run
+          - mountPath: /var/lib/openvswitch
+            name: var-lib-openvswitch
           - mountPath: /usr/local/bin
             name: bin
         - name: ovs-vswitchd
@@ -160,6 +162,13 @@ spec:
         searches:
           - {{ .Values.global.region }}.{{ .Values.global.tld }}
       volumes:
+{{- if not .Values.ovsOnHost }}
+      # Keep bridge/port configuration when the Pod is replaced.
+      - name: var-lib-openvswitch
+        hostPath:
+          path: /var/lib/openvswitch
+          type: DirectoryOrCreate
+{{- end }}
       - name: run
         hostPath:
           path: /run

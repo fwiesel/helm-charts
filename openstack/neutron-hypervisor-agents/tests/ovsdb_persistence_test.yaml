@@ -1,0 +1,64 @@
+suite: Node-local OVSDB persistence
+templates:
+  - templates/*.yaml
+  - templates/bin/*.tpl
+  - templates/etc/*.tpl
+values:
+  - ../ci/test-values.yaml
+set:
+  ovn.external_ids.OvnRemote: tcp:192.0.2.10:6642
+tests:
+  - it: persists the in-pod OVN database across Pod replacements
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: false
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: var-lib-openvswitch
+            mountPath: /var/lib/openvswitch
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: var-lib-openvswitch
+            hostPath:
+              path: /var/lib/openvswitch
+              type: DirectoryOrCreate
+  - it: persists the in-pod Open vSwitch agent database across Pod replacements
+    template: templates/daemonset-openvswitch-agent.yaml
+    set:
+      ovsOnHost: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].volumeMounts
+          content:
+            name: var-lib-openvswitch
+            mountPath: /var/lib/openvswitch
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: var-lib-openvswitch
+            hostPath:
+              path: /var/lib/openvswitch
+              type: DirectoryOrCreate
+  - it: leaves host-managed OVN database storage unchanged
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: var-lib-openvswitch
+          any: true
+  - it: leaves host-managed Open vSwitch database storage unchanged
+    template: templates/daemonset-openvswitch-agent.yaml
+    set:
+      ovsOnHost: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: var-lib-openvswitch
+          any: true
