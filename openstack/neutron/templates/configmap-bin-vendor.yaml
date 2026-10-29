@@ -14,4 +14,4 @@ data:
   neutron-asr1k-ml2-start: |
 {{ include (print .Template.BasePath "/bin/_neutron-asr1k-ml2-start.tpl") . | indent 4 }}
   common.sh: |
-{{ include "common.sh" .| indent 4 }}
+{{ include "common.sh" . | trim | indent 4 }}
