@@ -29,3 +29,27 @@ Do not copy a live database file without an OVS-supported consistency procedure.
 Validate a fresh deployment and subsequent Pod replacement with NFS mounted,
 checking bridge/port configuration, host connectivity, and NFS I/O. Rendering
 and unit tests alone do not establish that an existing-node upgrade is safe.
+
+## Host OVS provider bridge
+
+With `ovsOnHost: true` the chart consumes an OVS that the host owns (on SCI
+workers, `openvswitch-switch.service` from the network sysext). Upstream
+bare-metal provisioning creates the provider bridge itself, so the chart only
+configures one when `ovs.physicalBridgeTakeover` is true.
+
+On takeover, the `configure-host-ovs` init container of the
+`neutron-ovn-controller` DaemonSet runs before `ovn-controller`:
+
+* waits (bounded) for `/run/openvswitch/db.sock` and fails loudly instead of
+  starting an OVS daemon;
+* creates `ovs.physicalBridge` (`br-ovs0` by default) in the host OVSDB;
+* renders the same systemd-networkd drop-ins as `files/start-ovs-vswitchd.py`
+  into the host's `/etc/systemd/network`, shadows matching vendor `.network`
+  files, attaches `ovs.publicInterface` (auto-detected from the default route
+  when empty) to the bridge, and moves the DHCP lease onto it;
+* exits 0 when the bridge already owns the address, so Pod restarts and host
+  reboots are no-ops.
+
+The container never starts or stops `ovsdb-server`/`ovs-vswitchd`. The Pod
+needs `hostPID` so the script can run `networkctl` in the host's namespaces;
+it does not need `hostNetwork`.

@@ -1,0 +1,114 @@
+suite: Host OVS provider bridge
+templates:
+  - templates/*.yaml
+  - templates/bin/*.tpl
+  - templates/etc/*.tpl
+values:
+  - ../ci/test-values.yaml
+set:
+  ovn.external_ids.OvnRemote: tcp:192.0.2.10:6642
+tests:
+  - it: configures the provider bridge on the host OVS before ovn-controller starts
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: true
+      ovs.physicalBridgeTakeover: true
+      ovs.physicalBridge: br-ovs0
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: configure-host-ovs
+      - equal:
+          path: spec.template.spec.initContainers[0].command
+          value: ["configure-host-ovs"]
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext.privileged
+          value: true
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: OVS_PHYSICAL_BRIDGE
+            value: br-ovs0
+      - equal:
+          path: spec.template.spec.hostPID
+          value: true
+      - isNull:
+          path: spec.template.spec.hostNetwork
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: var-run-openvswitch
+            mountPath: /var/run/openvswitch
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: host-etc-systemd-network
+            mountPath: /host/etc/systemd/network
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: host-usr-lib-systemd-network
+            mountPath: /host/usr/lib/systemd/network
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-etc-systemd-network
+            hostPath:
+              path: /etc/systemd/network
+              type: DirectoryOrCreate
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-usr-lib-systemd-network
+            hostPath:
+              path: /usr/lib/systemd/network
+              type: DirectoryOrCreate
+  - it: never runs an OVS daemon in host mode
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: ovsdb-server
+          any: true
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: ovs-vswitchd
+          any: true
+  - it: leaves the container-mode init sequence unchanged
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: configure-host-ovs
+          any: true
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: ovsdb-server
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+  - it: ships the host bridge script in the bin ConfigMap in host mode
+    template: templates/configmap-bin.yaml
+    set:
+      ovsOnHost: true
+    asserts:
+      - isNotNull:
+          path: data.configure-host-ovs
+      - matchRegex:
+          path: data.configure-host-ovs
+          pattern: "OVS_PHYSICAL_BRIDGE_TAKEOVER"
+  - it: keeps the container-mode bin ConfigMap free of the host bridge script
+    template: templates/configmap-bin.yaml
+    set:
+      ovsOnHost: false
+    asserts:
+      - isNull:
+          path: data.configure-host-ovs

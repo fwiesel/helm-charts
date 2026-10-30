@@ -37,6 +37,13 @@ spec:
       # Enough time for preStop to save flows and gracefully exit ovs-vswitchd.
       terminationGracePeriodSeconds: 30
 {{- end }}
+{{- if .Values.ovsOnHost }}
+      # configure-host-ovs runs networkctl against the host's
+      # systemd-networkd through nsenter, so PID 1 must be the host's
+      # systemd. It does not need hostNetwork: every interface operation
+      # runs inside the host's network namespace via nsenter.
+      hostPID: true
+{{- end }}
       affinity:
         {{- toYaml $hypervisor.pod.affinity | nindent 8 }}
       tolerations:
@@ -104,6 +111,40 @@ spec:
             readOnly: true
           # start-ovs-vswitchd writes systemd-networkd drop-ins here to
           # migrate the DHCP lease from the primary NIC onto br-ovs0.
+          - mountPath: /host/etc/systemd/network
+            name: host-etc-systemd-network
+          - mountPath: /host/usr/lib/systemd/network
+            name: host-usr-lib-systemd-network
+            readOnly: true
+{{- end }}
+{{- if .Values.ovsOnHost }}
+        # The host OVS is owned by the host (SCI sysext). Upstream hosts get
+        # their provider bridge from bare-metal provisioning; fresh Gardener
+        # workers need it created and the primary NIC attached here.
+        - name: configure-host-ovs
+          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/loci-neutron:{{ .Values.imageVersion | required "Please set .imageVersion" }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          command:
+          - configure-host-ovs
+          env:
+          - name: OVS_PHYSICAL_BRIDGE_TAKEOVER
+            value: {{ quote (default false .Values.ovs.physicalBridgeTakeover) }}
+          - name: PUBLIC_INTERFACE
+            value: {{ quote (default "" .Values.ovs.publicInterface) }}
+          - name: OVS_PHYSICAL_BRIDGE
+            value: {{ quote (default "br-ovs0" .Values.ovs.physicalBridge) }}
+          volumeMounts:
+          - mountPath: /var/run/openvswitch
+            name: var-run-openvswitch
+          - mountPath: /usr/local/bin
+            name: bin
+          - mountPath: /usr/local/share/network-templates
+            name: network-templates
+            readOnly: true
+          # The drop-ins are written here to migrate the DHCP lease from the
+          # primary NIC onto the provider bridge.
           - mountPath: /host/etc/systemd/network
             name: host-etc-systemd-network
           - mountPath: /host/usr/lib/systemd/network
@@ -192,6 +233,20 @@ spec:
           configMap:
             name: {{ .Release.Name }}-bin
             defaultMode: 0755
+{{- if .Values.ovsOnHost }}
+        # configure-host-ovs writes systemd-networkd drop-ins on the host to
+        # move the primary NIC onto the provider bridge.
+        - name: host-etc-systemd-network
+          hostPath:
+            path: /etc/systemd/network
+            type: DirectoryOrCreate
+        # Read-only: vendor .network files that match the primary NIC are
+        # shadowed via /dev/null symlinks under /etc, never edited.
+        - name: host-usr-lib-systemd-network
+          hostPath:
+            path: /usr/lib/systemd/network
+            type: DirectoryOrCreate
+{{- end }}
 {{- if not .Values.ovsOnHost }}
         # Volumes for the in-pod ovsdb-server + ovs-vswitchd sidecars.
         # Keep bridge/port configuration when the Pod is replaced.
@@ -215,6 +270,7 @@ spec:
           hostPath:
             path: /usr/lib/systemd/network
             type: DirectoryOrCreate
+{{- end }}
         - name: bin
           configMap:
             name: {{ .Release.Name }}-bin
@@ -222,4 +278,3 @@ spec:
         - name: network-templates
           configMap:
             name: {{ .Release.Name }}-network-templates
-{{- end }}

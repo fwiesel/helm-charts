@@ -19,3 +19,9 @@ data:
     {{- include (print .Template.BasePath "/bin/_ovn_controller_readiness.sh.tpl") . | nindent 4 }}
   init.sh: |
     {{- include (print .Template.BasePath "/bin/_init.sh.tpl") . | nindent 4 }}
+{{- if .Values.ovsOnHost }}
+  # Gated on ovsOnHost so the container-mode ConfigMap (and therefore the
+  # DaemonSet's configmap-bin-hash) stays byte-identical.
+  configure-host-ovs: |
+    {{- include (print .Template.BasePath "/bin/_configure-host-ovs.tpl") . | nindent 4 }}
+{{- end }}
