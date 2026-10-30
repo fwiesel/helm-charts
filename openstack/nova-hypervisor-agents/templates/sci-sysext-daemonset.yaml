@@ -1,3 +1,6 @@
+{{- if and .Values.sciSysext.enabled (not .Values.hypervisor_on_host) }}
+{{- fail "sciSysext.enabled requires hypervisor_on_host: true — the SCI extensions start host OVS and host libvirt, which race the containerized sidecars for the same sockets and databases" }}
+{{- end }}
 {{- if .Values.sciSysext.enabled }}
 {{- $hypervisor := merge .Values.defaults.hypervisor.kvm .Values.defaults.hypervisor.common }}
 kind: DaemonSet

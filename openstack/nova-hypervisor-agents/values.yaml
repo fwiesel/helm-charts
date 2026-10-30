@@ -21,6 +21,8 @@ hypervisor_on_host: true
 # libvirt, OVS, QEMU, fixed identities) onto the host; it never deletes
 # host content and refuses hosts whose Garden Linux major line differs
 # from the manifest's TARGET_BASE.
+# Requires hypervisor_on_host: true, because the extensions start host OVS
+# and libvirt, which race the containerized sidecars for the same sockets.
 sciSysext:
   enabled: false
   # Full image reference including registry and digest, e.g.
