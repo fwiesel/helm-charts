@@ -15,6 +15,20 @@ imageVersionKubernetesEntrypoint: "latest"
 
 hypervisor_on_host: true
 
+# SCI systemd-sysext delivery. When enabled, a DaemonSet runs the SCI
+# delivery agent on every node selected by the hypervisor pod template.
+# The agent deploys and activates the signed sysext extensions (host
+# libvirt, OVS, QEMU, fixed identities) onto the host; it never deletes
+# host content and refuses hosts whose Garden Linux major line differs
+# from the manifest's TARGET_BASE.
+sciSysext:
+  enabled: false
+  # Full image reference including registry and digest, e.g.
+  # keppel.eu-de-1.cloud.sap/ccloud-ghcr-io-mirror/<owner>/sci-delivery@sha256:...
+  image: ""
+  # Seconds between delivery-agent passes on the host.
+  interval: "60"
+
 cross_az_attach: 'False'
 
 hypervisorAgentsServiceAccountName: null

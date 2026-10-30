@@ -1,0 +1,94 @@
+{{- if .Values.sciSysext.enabled }}
+{{- $hypervisor := merge .Values.defaults.hypervisor.kvm .Values.defaults.hypervisor.common }}
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: sci-sysext-delivery
+  labels:
+    system: openstack
+    type: backend
+    component: nova
+    app.kubernetes.io/name: sci-sysext-delivery
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sci-sysext-delivery
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+{{ tuple . "nova" "compute" | include "helm-toolkit.snippets.kubernetes_metadata_labels" | indent 8 }}
+        name: {{ .Release.Name }}
+        app.kubernetes.io/name: sci-sysext-delivery
+    spec:
+      serviceAccountName: {{ .Values.hypervisorAgentsServiceAccountName | default .Release.Name }}
+      # The agent enters PID 1's mount namespace (`nsenter -t 1 -m`) to call
+      # the host's systemctl/systemd-sysext, and joins the host IPC namespace
+      # because systemd-sysext waits on the System V semaphore host udevd
+      # posts for dm-verity activation.
+      hostPID: true
+      hostIPC: true
+      # The agent traps TERM and exits immediately, so a short grace period
+      # is safe and avoids dead time on every pod stop.
+      terminationGracePeriodSeconds: 15
+      tolerations:
+      {{- range $k, $v := merge $hypervisor.pod.tolerations .Values.pod.tolerations }}
+      - # {{ $k }}
+      {{- toYaml $v | nindent 8 }}
+      {{- end }}
+      {{- if $hypervisor.pod.nodeSelector }}
+      nodeSelector:
+        {{- $hypervisor.pod.nodeSelector | toYaml| nindent 8 }}
+      {{- end }}
+      {{- if $hypervisor.pod.affinity }}
+      affinity:
+        {{- $hypervisor.pod.affinity | toYaml| nindent 8 }}
+      {{- end }}
+      containers:
+        - name: sci-delivery
+          image: {{ required "sciSysext.image is required when sciSysext.enabled is true" .Values.sciSysext.image }}
+          imagePullPolicy: IfNotPresent
+          # The image ENTRYPOINT runs the agent, so the image and its baked-in
+          # staging path stay the single source of truth; only the env vars
+          # below are explicit.
+          env:
+            - name: HOST_ROOT
+              value: /host
+            - name: STAGING_DIR
+              value: /opt/sci
+            - name: INTERVAL
+              value: {{ .Values.sciSysext.interval | quote }}
+            - name: NSENTER
+              value: "1"
+          # Ready when no activation pass is pending: the marker is the
+          # agent's crash-safety record, written before the activation flow
+          # and removed only after it completed.
+          readinessProbe:
+            exec:
+              command: ["test", "!", "-e", "/host/var/lib/extensions/.sci-delivery-pending"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            # Assessed live on a host: the agent needs exactly SYS_ADMIN
+            # (setns into PID 1's mount namespace) and SYS_PTRACE (open
+            # /proc/1/ns/*; host PID 1 is non-dumpable), and it must be
+            # AppArmor-unconfined because containerd confines every
+            # non-privileged container with a default profile that denies
+            # entering other processes' namespaces. Anything less fails
+            # with EPERM at nsenter; anything more is unnecessary.
+            privileged: false
+            capabilities:
+              add: ["SYS_ADMIN", "SYS_PTRACE"]
+            appArmorProfile:
+              type: Unconfined
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+              mountPropagation: HostToContainer
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+{{- end }}
