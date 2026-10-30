@@ -40,8 +40,9 @@ configures one when `ovs.physicalBridgeTakeover` is true.
 On takeover, the `configure-host-ovs` init container of the
 `neutron-ovn-controller` DaemonSet runs before `ovn-controller`:
 
-* waits (bounded) for `/run/openvswitch/db.sock` and fails loudly instead of
-  starting an OVS daemon;
+* waits (bounded) for `/var/run/openvswitch/db.sock` (the socket the container
+  mounts; it does not mount `/run`) and fails loudly instead of starting an OVS
+  daemon;
 * creates `ovs.physicalBridge` (`br-ovs0` by default) in the host OVSDB;
 * renders the same systemd-networkd drop-ins as `files/start-ovs-vswitchd.py`
   into the host's `/etc/systemd/network`, shadows matching vendor `.network`

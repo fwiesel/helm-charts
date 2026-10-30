@@ -48,7 +48,11 @@ fi
 # The host's systemd-networkd, /sys and interfaces live in PID 1's
 # namespaces. Executables are resolved inside the host mount namespace, so
 # networkctl and arping do not have to exist in this image.
-[ -e /proc/1/ns/mnt ] || die "host PID namespace not visible; the Pod must run with hostPID"
+PID1_MNT="$(readlink /proc/1/ns/mnt 2>/dev/null || true)"
+SELF_MNT="$(readlink /proc/self/ns/mnt 2>/dev/null || true)"
+[ -n "$PID1_MNT" ] || die "cannot read /proc/1/ns/mnt; the Pod must run with hostPID"
+[ "$PID1_MNT" != "$SELF_MNT" ] \
+    || die "PID 1 shares this Pod's mount namespace; the Pod must run with hostPID to reach the host's systemd-networkd"
 command -v nsenter >/dev/null 2>&1 || die "nsenter not found in this image"
 HOST=(nsenter --mount=/proc/1/ns/mnt --net=/proc/1/ns/net --)
 
@@ -221,8 +225,10 @@ log "attaching $NIC to $BR"
 wait_for_bridge_ipv4 \
     || die "$BR did not acquire a DHCPv4 lease within ${BRIDGE_DHCP_TIMEOUT}s"
 
-BR_IP="$("${HOST[@]}" ip -4 -o addr show dev "$BR" \
-    | awk '{ for (i = 1; i <= NF; i++) if ($i == "inet") { split($(i + 1), a, "/"); print a[1]; exit } }')"
+if ! BR_IP="$("${HOST[@]}" ip -4 -o addr show dev "$BR" \
+        | awk '{ for (i = 1; i <= NF; i++) if ($i == "inet") { split($(i + 1), a, "/"); print a[1]; exit } }')"; then
+    die "could not query the IPv4 address of $BR on the host"
+fi
 if [ -n "$BR_IP" ]; then
     # Converge upstream CAM tables onto the bridge port.
     "${HOST[@]}" arping -q -c 2 -U -I "$BR" "$BR_IP" \
