@@ -60,7 +60,9 @@ defaults:
         reboot_timeout: 3600  # an hour
         rescue_timeout: 259200 # three days
         resize_confirm_window: 259200
-        use_cow_images: "false"
+        # The shared NFS instances volume cannot use server-side clone
+        # (EOPNOTSUPP); overlays restore seconds-scale creates.
+        use_cow_images: "true"
       vnc:
         enabled: true
       serial:
@@ -72,7 +74,9 @@ defaults:
           virt_type: ch
           hw_disk_discard: unmap
           hw_machine_type: q35
-          images_type: raw
+          # qcow2 overlays avoid the full-size raw copy per build; raw copies
+          # 3.76 GB over NFS every create and serializes on one flock.
+          images_type: qcow2
           inject_key: true
           inject_password: true
           iscsi_iface: "default"
