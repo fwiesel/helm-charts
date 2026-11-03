@@ -1,0 +1,179 @@
+suite: SCI sysext delivery init container (neutron-hypervisor-agents)
+templates:
+  - templates/*.yaml
+  - templates/bin/*.tpl
+  - templates/etc/*.tpl
+values:
+  - ../ci/test-values.yaml
+set:
+  ovn.external_ids.OvnRemote: "tcp:192.0.2.10:6642"
+tests:
+  - it: fails to render with the migration message when ovsOnHost is false
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "ovsOnHost: true"
+      - failedTemplate:
+          errorPattern: "sciSysext\\.image"
+  - it: renders no sci-sysext-delivery init, no host-root volume and no hostIPC on ovn-controller when sciSysext.image is empty
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: sci-sysext-delivery
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-root
+          any: true
+      - isNull:
+          path: spec.template.spec.hostIPC
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: configure-host-ovs
+  - it: renders the sci-sysext-delivery init before configure-host-ovs and enables hostIPC on ovn-controller when sciSysext.image is set
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: true
+      sciSysext.image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: sci-sysext-delivery
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: configure-host-ovs
+      - equal:
+          path: spec.template.spec.hostIPC
+          value: true
+      - equal:
+          path: spec.template.spec.hostPID
+          value: true
+  - it: pins the one-shot delivery contract (env, host-root mount, host-root volume) on the ovn-controller init container
+    template: templates/daemonset-ovn-controller.yaml
+    set:
+      ovsOnHost: true
+      sciSysext.image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].env
+          value:
+            - name: HOST_ROOT
+              value: /host
+            - name: STAGING_DIR
+              value: /opt/sci
+            - name: INTERVAL
+              value: "0"
+            - name: NSENTER
+              value: "1"
+      - equal:
+          path: spec.template.spec.initContainers[0].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext
+          value:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - SYS_PTRACE
+            appArmorProfile:
+              type: Unconfined
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: host-root
+            mountPath: /host
+            mountPropagation: HostToContainer
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-root
+            hostPath:
+              path: /
+              type: Directory
+  - it: renders no sci-sysext-delivery init but keeps hostIPC on the openvswitch-agent when sciSysext.image is empty
+    template: templates/daemonset-openvswitch-agent.yaml
+    set:
+      ovsOnHost: true
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: sci-sysext-delivery
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-root
+          any: true
+      - equal:
+          path: spec.template.spec.hostIPC
+          value: true
+  - it: renders the sci-sysext-delivery init with the delivery contract on the openvswitch-agent when sciSysext.image is set
+    template: templates/daemonset-openvswitch-agent.yaml
+    set:
+      ovsOnHost: true
+      sciSysext.image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: sci-sysext-delivery
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      - equal:
+          path: spec.template.spec.initContainers[0].env
+          value:
+            - name: HOST_ROOT
+              value: /host
+            - name: STAGING_DIR
+              value: /opt/sci
+            - name: INTERVAL
+              value: "0"
+            - name: NSENTER
+              value: "1"
+      - equal:
+          path: spec.template.spec.initContainers[0].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: spec.template.spec.initContainers[0].securityContext
+          value:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - SYS_PTRACE
+            appArmorProfile:
+              type: Unconfined
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: host-root
+            mountPath: /host
+            mountPropagation: HostToContainer
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-root
+            hostPath:
+              path: /
+              type: Directory
+      - equal:
+          path: spec.template.spec.hostIPC
+          value: true
+  - it: never renders a DaemonSet named sci-sysext-delivery
+    asserts:
+      - equal:
+          path: metadata.name
+          value: sci-sysext-delivery
+        not: true

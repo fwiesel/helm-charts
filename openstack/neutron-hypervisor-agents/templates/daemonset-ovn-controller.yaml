@@ -1,3 +1,6 @@
+{{- if not .Values.ovsOnHost }}
+{{- fail "ovsOnHost: false is no longer supported: the containerized OVS was removed because a sidecar cannot own the host dataplane. Set ovsOnHost: true. If the host does not provide the Open vSwitch stack natively, set sciSysext.image to deliver it at pod start." }}
+{{- end }}
 {{- $hypervisor := merge .Values.defaults.network.ovn .Values.defaults.network.common }}
 kind: DaemonSet
 apiVersion: apps/v1
@@ -29,20 +32,15 @@ spec:
       annotations:
         configmap-bin-hash: {{ include (print $.Template.BasePath "/configmap-bin.yaml") . | sha256sum }}
     spec:
-{{- if not .Values.ovsOnHost }}
-      # hostNetwork: share OVS control socket with the host / expose tunnel IPs.
-      # hostPID: ovs-appctl signals ovsdb-server by pidfile.
-      hostNetwork: true
-      hostPID: true
-      # Enough time for preStop to save flows and gracefully exit ovs-vswitchd.
-      terminationGracePeriodSeconds: 30
-{{- end }}
-{{- if .Values.ovsOnHost }}
       # configure-host-ovs runs networkctl against the host's
       # systemd-networkd through nsenter, so PID 1 must be the host's
       # systemd. It does not need hostNetwork: every interface operation
       # runs inside the host's network namespace via nsenter.
       hostPID: true
+{{- if .Values.sciSysext.image }}
+      # The delivery init needs the host IPC namespace for the dm-verity
+      # System V semaphore used by systemd-sysext refresh.
+      hostIPC: true
 {{- end }}
       affinity:
         {{- toYaml $hypervisor.pod.affinity | nindent 8 }}
@@ -56,66 +54,36 @@ spec:
         {{ $k }}: {{ $v }}
       {{- end }}
       initContainers:
-{{- if not .Values.ovsOnHost }}
-        # Native sidecar init containers (restartPolicy=Always, K8s >=1.29):
-        # start first and stay running so init-ovsdb-server below can wait
-        # on them without deadlock.
-        - name: ovsdb-server
-          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/loci-neutron:{{ .Values.imageVersion | required "Please set .imageVersion" }}
+      {{- if .Values.sciSysext.image }}
+        - name: sci-sysext-delivery
+          image: {{ .Values.sciSysext.image | quote }}
           imagePullPolicy: IfNotPresent
-          restartPolicy: Always
+          env:
+            - name: HOST_ROOT
+              value: /host
+            - name: STAGING_DIR
+              value: /opt/sci
+            - name: INTERVAL
+              value: "0"
+            - name: NSENTER
+              value: "1"
+          # Privileged on purpose: after mounting `/` at /host the agent
+          # mutates the host through nsenter, which needs capabilities an
+          # init container does not get by default. osl's privilege stamp
+          # only covers the retired standalone sci-sysext-delivery DaemonSet,
+          # not init containers, and earlier live runs of this unprivileged
+          # init failed with `Operation not permitted`.
           securityContext:
             privileged: true
-          command:
-          - start-ovsdb-server
-          env:
+            capabilities:
+              add: ["SYS_ADMIN", "SYS_PTRACE"]
+            appArmorProfile:
+              type: Unconfined
           volumeMounts:
-          - mountPath: /run
-            name: run
-          - mountPath: /usr/local/bin
-            name: bin
-        - name: ovs-vswitchd
-          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/loci-neutron:{{ .Values.imageVersion | required "Please set imageVersion or similar" }}
-          imagePullPolicy: IfNotPresent
-          restartPolicy: Always
-          securityContext:
-            privileged: true
-          command:
-          - start-ovs-vswitchd
-          # Save OpenFlow flows and stop ovs-vswitchd gracefully. The next
-          # start-ovs-vswitchd will set flow-restore-wait=true and replay
-          # the flows so the kernel datapath is not wiped.
-          lifecycle:
-            preStop:
-              exec:
-                command: [preStop-ovs-vswitchd]
-          env:
-          - name: OVS_PHYSICAL_BRIDGE_TAKEOVER
-            value: {{ quote (default false .Values.ovs.physicalBridgeTakeover) }}
-          - name: PUBLIC_INTERFACE
-            value: {{ quote (default "" .Values.ovs.publicInterface) }}
-          - name: OVS_PHYSICAL_BRIDGE
-            value: {{ quote (default "br-ovs0" .Values.ovs.physicalBridge) }}
-          volumeMounts:
-          - mountPath: /run
-            name: run
-          - mountPath: /lib/modules
-            name: modules
-            readOnly: true
-          - mountPath: /usr/local/bin
-            name: bin
-          - mountPath: /usr/local/share/start-ovs-vswitchd
-            name: network-templates
-            readOnly: true
-          # start-ovs-vswitchd writes systemd-networkd drop-ins here to
-          # migrate the DHCP lease from the primary NIC onto br-ovs0.
-          - mountPath: /host/etc/systemd/network
-            name: host-etc-systemd-network
-          - mountPath: /host/usr/lib/systemd/network
-            name: host-usr-lib-systemd-network
-            readOnly: true
-{{- end }}
-{{- if .Values.ovsOnHost }}
+            - name: host-root
+              mountPath: /host
+              mountPropagation: HostToContainer
+      {{- end }}
         # The host OVS is owned by the host (SCI sysext). Upstream hosts get
         # their provider bridge from bare-metal provisioning; fresh Gardener
         # workers need it created and the primary NIC attached here.
@@ -148,7 +116,6 @@ spec:
           - mountPath: /host/usr/lib/systemd/network
             name: host-usr-lib-systemd-network
             readOnly: true
-{{- end }}
         - name: init-ovsdb-server
           image: {{ .Values.global.registry | required ".Values.global.registry is missing" }}/cobaltcore-dev/openstack-ovn-controller:{{ .Values.imageVersionOVN | default "latest" }}
           imagePullPolicy: IfNotPresent
@@ -231,7 +198,6 @@ spec:
           configMap:
             name: {{ .Release.Name }}-bin
             defaultMode: 0755
-{{- if .Values.ovsOnHost }}
         # configure-host-ovs writes systemd-networkd drop-ins on the host to
         # move the primary NIC onto the provider bridge.
         - name: host-etc-systemd-network
@@ -244,26 +210,6 @@ spec:
           hostPath:
             path: /usr/lib/systemd/network
             type: DirectoryOrCreate
-{{- end }}
-{{- if not .Values.ovsOnHost }}
-        # Volumes for the in-pod ovsdb-server + ovs-vswitchd sidecars.
-        - name: run
-          hostPath:
-            path: /run
-        - name: modules
-          hostPath:
-            path: /lib/modules
-        - name: host-etc-systemd-network
-          hostPath:
-            path: /etc/systemd/network
-            type: DirectoryOrCreate
-        # Read-only: vendor .network files that match the primary NIC
-        # are shadowed via /dev/null symlinks under /etc, never edited.
-        - name: host-usr-lib-systemd-network
-          hostPath:
-            path: /usr/lib/systemd/network
-            type: DirectoryOrCreate
-{{- end }}
         - name: bin
           configMap:
             name: {{ .Release.Name }}-bin
@@ -271,3 +217,9 @@ spec:
         - name: network-templates
           configMap:
             name: {{ .Release.Name }}-network-templates
+        {{- if .Values.sciSysext.image }}
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        {{- end }}

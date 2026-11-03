@@ -79,22 +79,15 @@ tests:
           content:
             name: ovs-vswitchd
           any: true
-  - it: leaves the container-mode init sequence unchanged
+  - it: fails the render with the migration message when ovsOnHost is false
     template: templates/daemonset-ovn-controller.yaml
     set:
       ovsOnHost: false
     asserts:
-      - notContains:
-          path: spec.template.spec.initContainers
-          content:
-            name: configure-host-ovs
-          any: true
-      - equal:
-          path: spec.template.spec.initContainers[0].name
-          value: ovsdb-server
-      - equal:
-          path: spec.template.spec.hostNetwork
-          value: true
+      - failedTemplate:
+          errorPattern: "ovsOnHost: true"
+      - failedTemplate:
+          errorPattern: "sciSysext\\.image"
   - it: ships the host bridge script in the bin ConfigMap in host mode
     template: templates/configmap-bin.yaml
     set:
@@ -105,10 +98,11 @@ tests:
       - matchRegex:
           path: data.configure-host-ovs
           pattern: "OVS_PHYSICAL_BRIDGE_TAKEOVER"
-  - it: keeps the container-mode bin ConfigMap free of the host bridge script
-    template: templates/configmap-bin.yaml
+  - it: fails the render with the migration message instead of the container-mode bin ConfigMap
     set:
       ovsOnHost: false
     asserts:
-      - isNull:
-          path: data.configure-host-ovs
+      - failedTemplate:
+          errorPattern: "ovsOnHost: true"
+      - failedTemplate:
+          errorPattern: "sciSysext\\.image"
