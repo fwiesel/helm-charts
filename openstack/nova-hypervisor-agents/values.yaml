@@ -13,7 +13,18 @@ imageName: loci-nova
 imageVersion: null
 imageVersionKubernetesEntrypoint: "latest"
 
+# true is the only valid value: false selected the in-pod libvirt mode, which
+# was removed because it raced the host services, and now fails the render.
 hypervisor_on_host: true
+
+# SCI sysext delivery for the host libvirt/QEMU stack.
+# Empty: the host provides the stack natively (trust mode).
+# Set (digest-pinned): a one-shot init container delivers and activates the
+# stack at pod start; an already converged host is a no-op verify.
+# Must be the same digest in nova-hypervisor-agents and
+# neutron-hypervisor-agents.
+sciSysext:
+  image: ""
 
 cross_az_attach: 'False'
 

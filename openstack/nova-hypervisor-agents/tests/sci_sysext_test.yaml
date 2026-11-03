@@ -1,0 +1,141 @@
+suite: SCI sysext delivery init container (nova-hypervisor-agents)
+templates:
+  - templates/*.yaml
+values:
+  - ../ci/test-values.yaml
+set:
+  availability_zone: test-az
+tests:
+  - it: fails to render with the migration message when hypervisor_on_host is false
+    template: templates/hypervisors-kvm-daemonset.yaml
+    set:
+      hypervisor_on_host: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "hypervisor_on_host: true"
+      - failedTemplate:
+          errorPattern: "sciSysext\\.image"
+  - it: renders no sci-sysext-delivery init container and no host-root volume when sciSysext.image is empty
+    template: templates/hypervisors-kvm-daemonset.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: sci-sysext-delivery
+          any: true
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-root
+          any: true
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: kubernetes-entrypoint
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: nova-compute-init
+  - it: renders the sci-sysext-delivery init container with the exact image between kubernetes-entrypoint and nova-compute-init when sciSysext.image is set
+    template: templates/hypervisors-kvm-daemonset.yaml
+    set:
+      sciSysext.image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: kubernetes-entrypoint
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: sci-sysext-delivery
+      - equal:
+          path: spec.template.spec.initContainers[1].image
+          value: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      - equal:
+          path: spec.template.spec.initContainers[2].name
+          value: nova-compute-init
+  - it: pins the one-shot delivery contract (env, host-root mount, host-root volume) on the nova init container
+    template: templates/hypervisors-kvm-daemonset.yaml
+    set:
+      sciSysext.image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].env
+          value:
+            - name: HOST_ROOT
+              value: /host
+            - name: STAGING_DIR
+              value: /opt/sci
+            - name: INTERVAL
+              value: "0"
+            - name: NSENTER
+              value: "1"
+      - equal:
+          path: spec.template.spec.initContainers[1].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: spec.template.spec.initContainers[1].securityContext
+          value:
+            privileged: true
+            capabilities:
+              add:
+                - SYS_ADMIN
+                - SYS_PTRACE
+            appArmorProfile:
+              type: Unconfined
+      - contains:
+          path: spec.template.spec.initContainers[1].volumeMounts
+          content:
+            name: host-root
+            mountPath: /host
+            mountPropagation: HostToContainer
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: host-root
+            hostPath:
+              path: /
+              type: Directory
+      - equal:
+          path: spec.template.spec.hostIPC
+          value: true
+  - it: keeps the setup-nfs init container when instance_nfs_share is set without a delivery image
+    template: templates/hypervisors-kvm-daemonset.yaml
+    set:
+      defaults.hypervisor.kvm.instance_nfs_share: "nfs.example.com:/exports/nova"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: kubernetes-entrypoint
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: nova-compute-init
+      - equal:
+          path: spec.template.spec.initContainers[2].name
+          value: setup-nfs
+      - notContains:
+          path: spec.template.spec.initContainers
+          content:
+            name: sci-sysext-delivery
+          any: true
+  - it: renders setup-nfs after the delivery init when instance_nfs_share and sciSysext.image are both set
+    template: templates/hypervisors-kvm-daemonset.yaml
+    set:
+      defaults.hypervisor.kvm.instance_nfs_share: "nfs.example.com:/exports/nova"
+      sciSysext.image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: kubernetes-entrypoint
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: sci-sysext-delivery
+      - equal:
+          path: spec.template.spec.initContainers[2].name
+          value: nova-compute-init
+      - equal:
+          path: spec.template.spec.initContainers[3].name
+          value: setup-nfs
+  - it: never renders a DaemonSet named sci-sysext-delivery
+    asserts:
+      - equal:
+          path: metadata.name
+          value: sci-sysext-delivery
+        not: true

@@ -1,3 +1,6 @@
+{{- if not .Values.hypervisor_on_host }}
+{{- fail "hypervisor_on_host: false is no longer supported: the in-pod libvirt mode was removed because it raced the host services. Set hypervisor_on_host: true. If the host does not provide the libvirt/QEMU stack natively, set sciSysext.image to deliver it at pod start." }}
+{{- end }}
 {{- $hypervisor := merge .Values.defaults.hypervisor.kvm .Values.defaults.hypervisor.common }}
 kind: DaemonSet
 apiVersion: apps/v1
@@ -72,6 +75,36 @@ spec:
           valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
         - name: DEPENDENCY_CUSTOM_RESOURCE
           value: '[{"apiVersion":"kvm.cloud.sap/v1","kind":"Hypervisor","name":"$(NODE_NAME)","fields":[{"key":".status.conditions[?(@.type==\"TLSCertificateInstalled\")].status","value":"True"}]}]'
+      {{- if .Values.sciSysext.image }}
+      - name: sci-sysext-delivery
+        image: {{ .Values.sciSysext.image | quote }}
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: HOST_ROOT
+            value: /host
+          - name: STAGING_DIR
+            value: /opt/sci
+          - name: INTERVAL
+            value: "0"
+          - name: NSENTER
+            value: "1"
+        # Privileged on purpose: after mounting `/` at /host the agent mutates
+        # the host through nsenter, which needs capabilities an init container
+        # does not get by default. osl's privilege stamp only covers the
+        # retired standalone sci-sysext-delivery DaemonSet, not init
+        # containers, and earlier live runs of this unprivileged init failed
+        # with `Operation not permitted`.
+        securityContext:
+          privileged: true
+          capabilities:
+            add: ["SYS_ADMIN", "SYS_PTRACE"]
+          appArmorProfile:
+            type: Unconfined
+        volumeMounts:
+          - name: host-root
+            mountPath: /host
+            mountPropagation: HostToContainer
+      {{- end }}
       - name: nova-compute-init
         image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/{{ .Values.imageName }}:{{ .Values.imageVersion | required "Please set imageVersion similar" }}
         command: ["/container.init/nova-compute-init"]
@@ -80,7 +113,7 @@ spec:
             name: bin
           - mountPath: /var/lib/nova
             name: var-lib-nova
-      {{- if and .Values.hypervisor_on_host .Values.defaults.hypervisor.kvm.instance_nfs_share }}
+      {{- if .Values.defaults.hypervisor.kvm.instance_nfs_share }}
       - name: setup-nfs
         image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/{{ .Values.imageName }}:{{ .Values.imageVersion | required "Please set imageVersion similar" }}
         imagePullPolicy: IfNotPresent
@@ -103,23 +136,6 @@ spec:
           name: sys
         - mountPath: /var/lib/nova/instances
           mountPropagation: Bidirectional
-          name: instances
-      {{- end }}
-      {{- if not .Values.hypervisor_on_host }}
-      - name: load-kernel-mod
-        image: {{ required ".Values.global.dockerHubMirror is missing" .Values.global.dockerHubMirror }}/library/busybox
-        command:
-        - modprobe
-        - kvm
-        volumeMounts:
-        - mountPath: /lib/modules
-          name: modules
-          readOnly: true
-      - name: fix-permission-instance-volume
-        image: {{ required ".Values.global.dockerHubMirror is missing" .Values.global.dockerHubMirror }}/library/busybox
-        command: ["sh", "-c", "chown -R 42436:42436 /var/lib/nova/instances"]
-        volumeMounts:
-        - mountPath: /var/lib/nova/instances
           name: instances
       {{- end }}
       containers:
@@ -172,7 +188,6 @@ spec:
             name: multipath-etc
           - mountPath: /etc/iscsi
             name: iscsi-etc
-          {{- if .Values.hypervisor_on_host }}
           - mountPath: /usr/local/sbin/iscsiadm
             subPath: iscsiadm
             name: bin
@@ -192,85 +207,12 @@ spec:
             name: sudoers-etc
             subPath: nova
             readOnly: true
-          {{- end }}
-         {{- if not .Values.hypervisor_on_host }}
-        - name: nova-libvirt
-          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/{{ .Values.imageName }}:{{ .Values.imageVersion | required "Please set imageVersion similar" }}
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            privileged: true
-          command:
-          - /container.init/nova-libvirt-start
-          env:
-          volumeMounts:
-          - mountPath: /var/lib/nova/instances
-            name: instances
-          - mountPath: /var/lib/libvirt
-            name: libvirt
-          - mountPath: /run
-            name: run
-          - mountPath: /etc/libvirt
-            name: etclibvirt
-          - mountPath: /etc/libvirt/libvirtd.conf
-            name: hypervisor-config
-            subPath: libvirtd.conf
-            readOnly: true
-          - mountPath: /container.init
-            name: bin
-        - name: nova-virtlog
-          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/{{ .Values.imageName }}:{{ .Values.imageVersion | required "Please set imageVersion similar" }}
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            privileged: true
-          command:
-          - /usr/sbin/virtlogd
-          env:
-          volumeMounts:
-          - mountPath: /var/lib/nova/instances
-            name: instances
-          - mountPath: /var/lib/libvirt
-            name: libvirt
-          - mountPath: /var/run
-            name: run
-          - mountPath: /etc/libvirt
-            name: etclibvirt
-          - mountPath: /etc/libvirt/libvirtd.conf
-            name: hypervisor-config
-            subPath: libvirtd.conf
-            readOnly: true
-          - mountPath: /container.init
-            name: bin
-      {{- end }}
       dnsConfig:
         searches:
           - {{ .Values.global.region }}.{{ .Values.global.tld }}
       volumes:
       - name: var-lib-nova
         emptyDir: {}
-{{- if not .Values.hypervisor_on_host }}
-      - name: instances
-        persistentVolumeClaim:
-          claimName: nova-kvm-shared
-      - name: libvirt
-        emptyDir:
-          medium: Memory
-      - name: run
-        emptyDir:
-          medium: Memory
-      - name: modules
-        hostPath:
-          path: /lib/modules
-          type: Directory
-      - name: etclibvirt
-        emptyDir:
-          medium: Memory
-      - name: hypervisor-config
-        configMap:
-          name: {{ .Release.Name }}-compute
-          items:
-          - key: libvirtd.conf
-            path: libvirtd.conf
-{{- else }}
       - name: instances
         hostPath:
           path: /var/lib/nova/instances
@@ -295,16 +237,10 @@ spec:
         hostPath:
           path: /usr/share/qemu
           type: Directory
-{{- end }}
       - name: mnt
-{{- if not .Values.hypervisor_on_host }}
-        emptyDir:
-          medium: Memory
-{{- else }}
         hostPath:
           path: /var/lib/nova/mnt
           type: DirectoryOrCreate
-{{- end }}
       - name: sys
         hostPath:
           path: /sys
@@ -363,3 +299,9 @@ spec:
         configMap:
           name: {{ .Release.Name }}-bin
           defaultMode: 0755
+      {{- if .Values.sciSysext.image }}
+      - name: host-root
+        hostPath:
+          path: /
+          type: Directory
+      {{- end }}
