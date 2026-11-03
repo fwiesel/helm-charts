@@ -87,7 +87,7 @@ tests:
       - failedTemplate:
           errorPattern: "ovsOnHost: true"
       - failedTemplate:
-          errorPattern: "sciSysext\\.image"
+          errorPattern: "sciSysext"
   - it: ships the host bridge script in the bin ConfigMap in host mode
     template: templates/configmap-bin.yaml
     set:
@@ -105,4 +105,4 @@ tests:
       - failedTemplate:
           errorPattern: "ovsOnHost: true"
       - failedTemplate:
-          errorPattern: "sciSysext\\.image"
+          errorPattern: "sciSysext"

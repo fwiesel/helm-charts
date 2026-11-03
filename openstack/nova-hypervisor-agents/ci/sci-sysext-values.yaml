@@ -28,5 +28,21 @@ defaults:
         nodeSelector:
           species: hypervisor
 
+# Render-only example: the consumer is enabled with placeholder values. The
+# URL and digest name no real build, so this is not an installable release.
 sciSysext:
-  image: "registry.example.com/sci-delivery@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  image: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  release:
+    url: "https://github.com/gardenlinux/gardenlinux-sci/releases/download/2150.9.0-g00a1df9"
+    sumsDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  publicKey: |
+    -----BEGIN PUBLIC KEY-----
+    MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAK0123456789abcdef
+    -----END PUBLIC KEY-----
+  extensions:
+    - sci-10-base
+    - sci-20-compute
+    - sci-22-storage
+    - sci-40-libvirt
+    - sci-50-virt-ch
+    - sci-51-virt-qemu

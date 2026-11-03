@@ -1,6 +1,7 @@
 {{- if not .Values.ovsOnHost }}
-{{- fail "ovsOnHost: false is no longer supported: the containerized OVS was removed because a sidecar cannot own the host dataplane. Set ovsOnHost: true. If the host does not provide the Open vSwitch stack natively, set sciSysext.image to deliver it at pod start." }}
+{{- fail "ovsOnHost: false is no longer supported: the containerized OVS was removed because a sidecar cannot own the host dataplane. Set ovsOnHost: true. If the host does not provide the Open vSwitch stack natively, set sciSysext (image, release, publicKey, extensions) to consume a signed SCI release at pod start." }}
 {{- end }}
+{{- include "sciSysext.validate" . }}
 {{- $hypervisor := merge .Values.defaults.network.ovn .Values.defaults.network.common }}
 kind: DaemonSet
 apiVersion: apps/v1
@@ -37,8 +38,8 @@ spec:
       # systemd. It does not need hostNetwork: every interface operation
       # runs inside the host's network namespace via nsenter.
       hostPID: true
-{{- if .Values.sciSysext.image }}
-      # The delivery init needs the host IPC namespace for the dm-verity
+{{- if include "sciSysext.enabled" . }}
+      # The consumer init needs the host IPC namespace for the dm-verity
       # System V semaphore used by systemd-sysext refresh.
       hostIPC: true
 {{- end }}
@@ -54,19 +55,12 @@ spec:
         {{ $k }}: {{ $v }}
       {{- end }}
       initContainers:
-      {{- if .Values.sciSysext.image }}
-        - name: sci-sysext-delivery
+      {{- if include "sciSysext.enabled" . }}
+        - name: sci-sysext-consumer
           image: {{ .Values.sciSysext.image | quote }}
           imagePullPolicy: IfNotPresent
           env:
-            - name: HOST_ROOT
-              value: /host
-            - name: STAGING_DIR
-              value: /opt/sci
-            - name: INTERVAL
-              value: "0"
-            - name: NSENTER
-              value: "1"
+            {{- include "sciSysext.env" . | nindent 12 }}
           # Privileged on purpose: after mounting `/` at /host the agent
           # mutates the host through nsenter, which needs capabilities an
           # init container does not get by default. osl's privilege stamp
@@ -217,7 +211,7 @@ spec:
         - name: network-templates
           configMap:
             name: {{ .Release.Name }}-network-templates
-        {{- if .Values.sciSysext.image }}
+        {{- if include "sciSysext.enabled" . }}
         - name: host-root
           hostPath:
             path: /

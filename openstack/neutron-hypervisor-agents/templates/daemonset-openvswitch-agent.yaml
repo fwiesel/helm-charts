@@ -1,3 +1,4 @@
+{{- include "sciSysext.validate" . }}
 {{- $hypervisor := merge .Values.defaults.network.ovs .Values.defaults.network.common }}
 kind: DaemonSet
 apiVersion: apps/v1
@@ -100,20 +101,13 @@ spec:
           - mountPath: /lib/modules
             name: modules
             readOnly: true
-      {{- if .Values.sciSysext.image }}
+      {{- if include "sciSysext.enabled" . }}
       initContainers:
-        - name: sci-sysext-delivery
+        - name: sci-sysext-consumer
           image: {{ .Values.sciSysext.image | quote }}
           imagePullPolicy: IfNotPresent
           env:
-            - name: HOST_ROOT
-              value: /host
-            - name: STAGING_DIR
-              value: /opt/sci
-            - name: INTERVAL
-              value: "0"
-            - name: NSENTER
-              value: "1"
+            {{- include "sciSysext.env" . | nindent 12 }}
           # Privileged on purpose: after mounting `/` at /host the agent
           # mutates the host through nsenter, which needs capabilities an
           # init container does not get by default. osl's privilege stamp
@@ -171,7 +165,7 @@ spec:
         configMap:
           name: {{ .Release.Name }}-bin
           defaultMode: 0755
-      {{- if .Values.sciSysext.image }}
+      {{- if include "sciSysext.enabled" . }}
       - name: host-root
         hostPath:
           path: /

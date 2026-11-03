@@ -29,14 +29,27 @@ The container never starts or stops `ovsdb-server`/`ovs-vswitchd`. The Pod
 needs `hostPID` so the script can run `networkctl` in the host's namespaces;
 it does not need `hostNetwork`.
 
-## SCI sysext delivery
+## SCI sysext consumer
 
-`sciSysext.image` controls how the host OVS stack is provisioned:
+The host OVS stack comes from a signed SCI release published by
+`gardenlinux/gardenlinux-sci`. This chart consumes that release; it does not
+build or publish sysext artifacts.
 
-* empty (default) — trust mode: the host provides the stack natively and the
-  chart adds no delivery container;
-* set — a `sci-sysext-delivery` init container runs one pass at Pod start and
-  installs or activates the stack; an already converged host is a no-op verify.
+`sciSysext` controls how the stack is provisioned:
+
+* all keys empty (default) — trust mode: the host provides the stack natively
+  and the chart renders no consumer container;
+* all keys set — a `sci-sysext-consumer` init container runs one pass at Pod
+  start: it verifies the release, deploys the extensions listed in
+  `extensions`, merges them on the host, and restarts the units those
+  extensions own. An already converged host is a no-op verify.
+
+A partially set `sciSysext` block fails the render. `image` is this repo's
+consumer image (`openstack/sci-consumer`), not the release.
+
+The network DaemonSets ask for `sci-10-base` and `sci-21-network`, and nothing
+else. The full release carries more; the consumer deploys only what
+`extensions` names, and it never removes a name another consumer deployed.
 
 The init container mounts the host root at `/host`, runs `privileged: true`, and
 adds `SYS_ADMIN`/`SYS_PTRACE` with an unconfined AppArmor profile so it can
@@ -44,8 +57,8 @@ enter the host namespaces. Privilege is chart-side on purpose: osl's
 post-renderer stamps it only onto the retired standalone `sci-sysext-delivery`
 DaemonSet, never onto init containers, and the unprivileged variant failed live
 with `Operation not permitted`. It is added to both the `ovn-controller` and
-`openvswitch-agent`
-DaemonSets. Only the `ovn-controller` Pod gains `hostIPC: true`, which the
-dm-verity System V semaphore needs during `systemd-sysext refresh`. Use the
-same image digest in `nova-hypervisor-agents`: the two charts share the host
-stack, and skewed digests would fight over the merged sysext.
+`openvswitch-agent` DaemonSets. Only the `ovn-controller` Pod gains
+`hostIPC: true`, which the dm-verity System V semaphore needs during
+`systemd-sysext refresh`. Point `nova-hypervisor-agents` at the same release
+and `sumsDigest`: the two charts share the host, and a skewed build would make
+the shared extensions flap between Pod restarts.

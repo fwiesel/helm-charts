@@ -1,0 +1,15 @@
+# Values that enable the SCI consumer, for the render tests.
+# The digest and the URL are placeholders: the shape is under test here, not
+# the build they name.
+sciSysext:
+  image: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  release:
+    url: "https://github.com/gardenlinux/gardenlinux-sci/releases/download/2150.9.0-g00a1df9"
+    sumsDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  publicKey: |
+    -----BEGIN PUBLIC KEY-----
+    MFwwDQYJKoZIhvcNAQEBBQADSwAwSAJBAK0123456789abcdef
+    -----END PUBLIC KEY-----
+  extensions:
+    - sci-10-base
+    - sci-21-network
