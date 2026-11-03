@@ -1,4 +1,4 @@
-suite: SCI sysext consumer init container (neutron-hypervisor-agents)
+suite: SCI sysext activation init container (neutron-hypervisor-agents)
 templates:
   - templates/*.yaml
   - templates/bin/*.tpl
@@ -18,7 +18,7 @@ tests:
       - failedTemplate:
           errorPattern: "sciSysext"
 
-  - it: renders no consumer init, no host-root volume and no hostIPC on ovn-controller when sciSysext is empty
+  - it: renders no activation init, no host-root volume and no hostIPC on ovn-controller in trust mode
     template: templates/daemonset-ovn-controller.yaml
     set:
       ovsOnHost: true
@@ -26,7 +26,7 @@ tests:
       - notContains:
           path: spec.template.spec.initContainers
           content:
-            name: sci-sysext-consumer
+            name: activate-sci-sysext
           any: true
       - notContains:
           path: spec.template.spec.volumes
@@ -43,10 +43,10 @@ tests:
     template: templates/daemonset-ovn-controller.yaml
     set:
       ovsOnHost: true
-      sciSysext.image: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      sciSysext.release.url: https://artifacts.example.com/sci/build
     asserts:
       - failedTemplate:
-          errorPattern: "set image, release.url, release.sumsDigest, publicKey and extensions together"
+          errorPattern: "set release.url, release.sumsDigest and publicKey together"
 
   - it: refuses a sumsDigest that is not a sha256
     template: templates/daemonset-ovn-controller.yaml
@@ -71,7 +71,7 @@ tests:
       - failedTemplate:
           errorPattern: "invalid extension name"
 
-  - it: renders the consumer before configure-host-ovs and enables hostIPC on ovn-controller
+  - it: renders activation before configure-host-ovs and enables hostIPC on ovn-controller
     template: templates/daemonset-ovn-controller.yaml
     values:
       - sci-sysext-values.yaml
@@ -80,10 +80,10 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.initContainers[0].name
-          value: sci-sysext-consumer
+          value: activate-sci-sysext
       - equal:
           path: spec.template.spec.initContainers[0].image
-          value: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          value: registry.example.com/internal/loci-neutron:queens
       - equal:
           path: spec.template.spec.initContainers[1].name
           value: configure-host-ovs
@@ -94,7 +94,7 @@ tests:
           path: spec.template.spec.hostPID
           value: true
 
-  - it: passes the release contract to the ovn-controller consumer
+  - it: passes the release contract to the ovn-controller activation init
     template: templates/daemonset-ovn-controller.yaml
     values:
       - sci-sysext-values.yaml
@@ -116,12 +116,15 @@ tests:
               value: "sci-10-base sci-21-network"
             - name: SCI_DEADLINE
               value: "900"
+            - name: SCI_AGENT
+              value: neutron-ovn-controller
       - equal:
           path: spec.template.spec.initContainers[0].imagePullPolicy
           value: IfNotPresent
       - equal:
           path: spec.template.spec.initContainers[0].securityContext
           value:
+            runAsUser: 0
             privileged: true
             capabilities:
               add:
@@ -143,7 +146,7 @@ tests:
               path: /
               type: Directory
 
-  - it: renders no consumer init but keeps hostIPC on the openvswitch-agent when sciSysext is empty
+  - it: renders no activation init but keeps hostIPC on the openvswitch-agent in trust mode
     template: templates/daemonset-openvswitch-agent.yaml
     set:
       ovsOnHost: true
@@ -151,7 +154,7 @@ tests:
       - notContains:
           path: spec.template.spec.initContainers
           content:
-            name: sci-sysext-consumer
+            name: activate-sci-sysext
           any: true
       - notContains:
           path: spec.template.spec.volumes
@@ -162,7 +165,7 @@ tests:
           path: spec.template.spec.hostIPC
           value: true
 
-  - it: renders the consumer with the release contract on the openvswitch-agent
+  - it: renders activation with the release contract on the openvswitch-agent
     template: templates/daemonset-openvswitch-agent.yaml
     values:
       - sci-sysext-values.yaml
@@ -171,10 +174,10 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.initContainers[0].name
-          value: sci-sysext-consumer
+          value: activate-sci-sysext
       - equal:
           path: spec.template.spec.initContainers[0].image
-          value: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          value: registry.example.com/internal/loci-neutron:queens
       - equal:
           path: spec.template.spec.initContainers[0].env[4].name
           value: SCI_EXTENSIONS

@@ -1,12 +1,12 @@
 {{/*
-SCI sysext consumer.
+SCI activation in the agent's init container.
 
 The artifact is a signed release published by gardenlinux-sci. This chart only
 consumes it: verify, deploy the selected extensions, merge, restart the units
 those extensions own.
 
-All keys are set together, or all stay empty. Empty means the host provides the
-stack natively and no consumer container is rendered.
+An empty release means trust mode. The chart owns the selection and supplies
+the activation script through its bin ConfigMap, using the existing agent image.
 */}}
 
 {{- define "sciSysext.validate" -}}
@@ -17,6 +17,9 @@ stack natively and no consumer container is rendered.
 {{- $publicKey := default "" $s.publicKey -}}
 {{- $image := default "" $s.image -}}
 {{- $extensions := default (list) $s.extensions -}}
+{{- if $image -}}
+{{- fail "sciSysext.image is no longer used: the agent image runs the chart's activation script. Set release.url, release.sumsDigest and publicKey instead." -}}
+{{- end -}}
 {{- if and $digest (not (regexMatch "^[0-9a-f]{64}$" $digest)) -}}
 {{- fail (printf "sciSysext.release.sumsDigest must be 64 lowercase hex characters, got %q" $digest) -}}
 {{- end -}}
@@ -25,15 +28,21 @@ stack natively and no consumer container is rendered.
 {{- fail (printf "sciSysext.extensions carries an invalid extension name: %q" .) -}}
 {{- end -}}
 {{- end -}}
-{{- if and (or $image $url $digest $publicKey $extensions) (not (and $image $url $digest $publicKey $extensions)) -}}
-{{- fail "sciSysext: set image, release.url, release.sumsDigest, publicKey and extensions together, or leave all of them empty (trust mode)" -}}
+{{- if and (or $url $digest $publicKey) (not (and $url $digest $publicKey)) -}}
+{{- fail "sciSysext: set release.url, release.sumsDigest and publicKey together, or leave all three empty (trust mode)" -}}
+{{- end -}}
+{{- if and $url (not $extensions) -}}
+{{- fail "sciSysext.extensions must not be empty when release.url is set" -}}
+{{- end -}}
+{{- if and $url (not (regexMatch "^https?://" $url)) -}}
+{{- fail "sciSysext.release.url must use HTTP or HTTPS" -}}
 {{- end -}}
 {{- end -}}
 
 {{- define "sciSysext.enabled" -}}
 {{- $s := default dict .Values.sciSysext -}}
 {{- $rel := default dict $s.release -}}
-{{- if and $s.image $rel.url $rel.sumsDigest $s.publicKey $s.extensions -}}true{{- end -}}
+{{- if $rel.url -}}true{{- end -}}
 {{- end -}}
 
 {{- define "sciSysext.env" -}}

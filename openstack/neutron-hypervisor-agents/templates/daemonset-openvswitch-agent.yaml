@@ -103,11 +103,14 @@ spec:
             readOnly: true
       {{- if include "sciSysext.enabled" . }}
       initContainers:
-        - name: sci-sysext-consumer
-          image: {{ .Values.sciSysext.image | quote }}
+        - name: activate-sci-sysext
+          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/loci-neutron:{{ .Values.imageVersion | required "Please set .imageVersion" }}
           imagePullPolicy: IfNotPresent
+          command: [bash, /container.init/activate-sci-sysext]
           env:
             {{- include "sciSysext.env" . | nindent 12 }}
+            - name: SCI_AGENT
+              value: neutron-openvswitch-agent
           # Privileged on purpose: after mounting `/` at /host the agent
           # mutates the host through nsenter, which needs capabilities an
           # init container does not get by default. osl's privilege stamp
@@ -115,12 +118,16 @@ spec:
           # not init containers, and earlier live runs of this unprivileged
           # init failed with `Operation not permitted`.
           securityContext:
+            runAsUser: 0
             privileged: true
             capabilities:
               add: ["SYS_ADMIN", "SYS_PTRACE"]
             appArmorProfile:
               type: Unconfined
           volumeMounts:
+            - name: bin
+              mountPath: /container.init
+              readOnly: true
             - name: host-root
               mountPath: /host
               mountPropagation: HostToContainer

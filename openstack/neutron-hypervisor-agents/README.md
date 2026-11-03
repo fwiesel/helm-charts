@@ -29,7 +29,7 @@ The container never starts or stops `ovsdb-server`/`ovs-vswitchd`. The Pod
 needs `hostPID` so the script can run `networkctl` in the host's namespaces;
 it does not need `hostNetwork`.
 
-## SCI sysext consumer
+## SCI sysext activation per agent
 
 The host OVS stack comes from a signed SCI release published by
 `gardenlinux/gardenlinux-sci`. This chart consumes that release; it does not
@@ -37,15 +37,18 @@ build or publish sysext artifacts.
 
 `sciSysext` controls how the stack is provisioned:
 
-* all keys empty (default) — trust mode: the host provides the stack natively
-  and the chart renders no consumer container;
-* all keys set — a `sci-sysext-consumer` init container runs one pass at Pod
-  start: it verifies the release, deploys the extensions listed in
+* release and public key empty (default) — trust mode: the host provides the
+  stack natively and the chart renders no activation container;
+* release and public key set — an `activate-sci-sysext` init container runs one
+  pass at Pod start: it verifies the release, deploys the extensions listed in
   `extensions`, merges them on the host, and restarts the units those
   extensions own. An already converged host is a no-op verify.
 
-A partially set `sciSysext` block fails the render. `image` is this repo's
-consumer image (`openstack/sci-consumer`), not the release.
+A partially set release configuration fails the render. Both `ovn-controller`
+and `openvswitch-agent` run the script from this chart's `bin` ConfigMap, in
+their existing `loci-neutron` image. There is no separate consumer image or
+DaemonSet. The script is `files/activate-sci-sysext.sh`; it does not execute
+upstream's pipeline test script.
 
 The network DaemonSets ask for `sci-10-base` and `sci-21-network`, and nothing
 else. The full release carries more; the consumer deploys only what
@@ -62,3 +65,16 @@ with `Operation not permitted`. It is added to both the `ovn-controller` and
 `systemd-sysext refresh`. Point `nova-hypervisor-agents` at the same release
 and `sumsDigest`: the two charts share the host, and a skewed build would make
 the shared extensions flap between Pod restarts.
+
+The signed manifest supplies restart-unit names. The chart supplies the
+extension selection. Only changed raws trigger their unit restarts; a failed
+required restart blocks the agent and is retried at the next init. Downloads
+can run concurrently, while the node-global merge is protected by a host lock.
+Verified files are cached under `/var/lib/sci-sysext/cache/<sums-digest>`, and
+retry markers are per agent. This chart removes neither deployed extensions
+nor another agent's cache. A matching host verity trust anchor must be
+provisioned separately; the script does not change host trust.
+
+Roll out release changes only in a maintenance window, not during a running
+workload test. Unit tests use signed fixtures and stub host commands. Live
+verity, NFS and dataplane checks still require a real deployment.

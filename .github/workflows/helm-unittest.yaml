@@ -53,3 +53,7 @@ jobs:
             fi
           done
           exit $failed
+      - name: Run SCI agent activation contracts
+        run: |
+          python3 ci/test_sci_activation.py
+          SCI_TEST_CHART=neutron-hypervisor-agents python3 ci/test_sci_activation.py

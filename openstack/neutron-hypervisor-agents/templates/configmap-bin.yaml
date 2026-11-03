@@ -23,3 +23,7 @@ data:
   # DaemonSet's configmap-bin-hash) stays byte-identical.
   configure-host-ovs: |
     {{- include (print .Template.BasePath "/bin/_configure-host-ovs.tpl") . | nindent 4 }}
+{{- if include "sciSysext.enabled" . }}
+  activate-sci-sysext: |
+    {{- .Files.Get "files/activate-sci-sysext.sh" | nindent 4 }}
+{{- end }}

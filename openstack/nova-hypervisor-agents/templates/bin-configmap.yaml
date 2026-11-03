@@ -8,3 +8,7 @@ metadata:
     component: nova
 data:
 {{ (.Files.Glob "bin/*").AsConfig | indent 2 }}
+{{- if include "sciSysext.enabled" . }}
+  activate-sci-sysext: |
+    {{- .Files.Get "files/activate-sci-sysext.sh" | nindent 4 }}
+{{- end }}

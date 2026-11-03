@@ -1,5 +1,5 @@
 {{- if not .Values.ovsOnHost }}
-{{- fail "ovsOnHost: false is no longer supported: the containerized OVS was removed because a sidecar cannot own the host dataplane. Set ovsOnHost: true. If the host does not provide the Open vSwitch stack natively, set sciSysext (image, release, publicKey, extensions) to consume a signed SCI release at pod start." }}
+{{- fail "ovsOnHost: false is no longer supported: the containerized OVS was removed because a sidecar cannot own the host dataplane. Set ovsOnHost: true. If the host does not provide the Open vSwitch stack natively, set sciSysext.release and sciSysext.publicKey to activate the agent's extensions at pod start." }}
 {{- end }}
 {{- include "sciSysext.validate" . }}
 {{- $hypervisor := merge .Values.defaults.network.ovn .Values.defaults.network.common }}
@@ -39,7 +39,7 @@ spec:
       # runs inside the host's network namespace via nsenter.
       hostPID: true
 {{- if include "sciSysext.enabled" . }}
-      # The consumer init needs the host IPC namespace for the dm-verity
+      # The activation init needs the host IPC namespace for the dm-verity
       # System V semaphore used by systemd-sysext refresh.
       hostIPC: true
 {{- end }}
@@ -56,11 +56,14 @@ spec:
       {{- end }}
       initContainers:
       {{- if include "sciSysext.enabled" . }}
-        - name: sci-sysext-consumer
-          image: {{ .Values.sciSysext.image | quote }}
+        - name: activate-sci-sysext
+          image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/loci-neutron:{{ .Values.imageVersion | required "Please set .imageVersion" }}
           imagePullPolicy: IfNotPresent
+          command: [bash, /container.init/activate-sci-sysext]
           env:
             {{- include "sciSysext.env" . | nindent 12 }}
+            - name: SCI_AGENT
+              value: neutron-ovn-controller
           # Privileged on purpose: after mounting `/` at /host the agent
           # mutates the host through nsenter, which needs capabilities an
           # init container does not get by default. osl's privilege stamp
@@ -68,12 +71,16 @@ spec:
           # not init containers, and earlier live runs of this unprivileged
           # init failed with `Operation not permitted`.
           securityContext:
+            runAsUser: 0
             privileged: true
             capabilities:
               add: ["SYS_ADMIN", "SYS_PTRACE"]
             appArmorProfile:
               type: Unconfined
           volumeMounts:
+            - name: bin
+              mountPath: /container.init
+              readOnly: true
             - name: host-root
               mountPath: /host
               mountPropagation: HostToContainer

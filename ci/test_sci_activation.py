@@ -1,21 +1,28 @@
 #!/usr/bin/env -S uv run --script
-# Consumer contract for sci-consumer.sh.
+# SPDX-License-Identifier: Apache-2.0
+# Contract tests for the agent charts' activate-sci-sysext scripts.
 #
 # Stdlib only: build a signed release and a fake host in a temporary
 # directory, run the script against them, assert the host state and the
 # systemctl calls it made.
 #
-# Run: ./tests/test_consumer.py   (or: python3 tests/test_consumer.py)
+# Run: uv run ci/test_sci_activation.py
+from __future__ import annotations
+
 import hashlib
+import http.server
 import os
 import shutil
 import subprocess
 import tempfile
 import textwrap
+import threading
 import unittest
 from pathlib import Path
 
-SCRIPT = Path(__file__).resolve().parent.parent / "sci-consumer.sh"
+ROOT = Path(__file__).resolve().parents[1]
+CHART = os.environ.get("SCI_TEST_CHART", "nova-hypervisor-agents")
+SCRIPT = ROOT / "openstack" / CHART / "files/activate-sci-sysext.sh"
 
 EXTENSIONS = ["sci-10-base", "sci-20-compute", "sci-21-network", "sci-22-storage"]
 UNITS = {
@@ -57,6 +64,7 @@ class Fixture:
         self.keys = root / "keys"
         self.log = root / "calls.log"
         self.fail_refresh = root / "fail-refresh"
+        self.fail_unit = root / "fail-unit"
 
         for path in (self.release, self.host, self.bin, self.keys):
             path.mkdir(parents=True)
@@ -65,20 +73,23 @@ class Fixture:
         self.cert = self.keys / "signing.crt"
         self.pub = self.keys / "signing.pem"
         run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-             "-subj", "/CN=sci-consumer-test", "-keyout", self.key, "-out", self.cert])
+             "-subj", "/CN=sci-activation-test", "-keyout", self.key, "-out", self.cert])
         run(["openssl", "pkey", "-in", self.key, "-pubout", "-out", self.pub])
 
         (self.host / "etc").mkdir()
         (self.host / "var/lib/extensions").mkdir(parents=True)
         (self.host / "etc/systemd/system").mkdir(parents=True)
         (self.host / "usr/lib/verity.d").mkdir(parents=True)
-        (self.host / "etc/os-release").write_text('VERSION_ID="2150.9.0"\n')
+        (self.host / "etc/os-release").write_text('ID=gardenlinux\nIMAGE_VERSION="2150.9.0"\nVERSION_ID="2150.9.0"\n')
         shutil.copy(self.cert, self.host / "usr/lib/verity.d/verity.crt")
 
         (self.bin / "systemctl").write_text(textwrap.dedent("""\
             #!/usr/bin/env bash
             printf '%s\\n' "systemctl $*" >>"$FAKE_LOG"
             cmd=$1; shift
+            if [ "$cmd" = restart ] && [ -f "$FAKE_FAIL_UNIT" ] && [ "$1" = libvirtd.service ]; then
+                exit 1
+            fi
             if [ "$cmd" = enable ]; then
                 unit=$1
                 wants=$FAKE_HOST_ROOT/etc/systemd/system/multi-user.target.wants
@@ -125,9 +136,11 @@ class Fixture:
             "SCI_PUBKEY_FILE": str(self.pub),
             "SCI_EXTENSIONS": extensions,
             "SCI_NSENTER": "0",
+            "SCI_AGENT": "test-agent",
             "FAKE_LOG": str(self.log),
             "FAKE_HOST_ROOT": str(self.host),
             "FAKE_FAIL_REFRESH": str(self.fail_refresh),
+            "FAKE_FAIL_UNIT": str(self.fail_unit),
         })
         env.pop("SCI_STATE_DIR", None)
         env.update(overrides)
@@ -135,7 +148,7 @@ class Fixture:
 
     def run_consumer(self, **overrides):
         return subprocess.run(["bash", str(SCRIPT)], env=self.env(**overrides),
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, timeout=30)
 
     def calls(self) -> str:
         return self.log.read_text() if self.log.exists() else ""
@@ -159,7 +172,9 @@ class Fixture:
 
 class ConsumerTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="sci-consumer-test-"))
+        state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "helm-chart-tests"
+        state.mkdir(parents=True, exist_ok=True)
+        self.tmp = Path(tempfile.mkdtemp(prefix="sci-activation-", dir=state))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.fx = Fixture(self.tmp)
 
@@ -228,7 +243,7 @@ class ConsumerTest(unittest.TestCase):
         self.assertEqual(self.fx.deployed(), [])
 
     def test_wrong_base_line_is_refused(self):
-        (self.fx.host / "etc/os-release").write_text('VERSION_ID="1900.0.0"\n')
+        (self.fx.host / "etc/os-release").write_text('ID=gardenlinux\nIMAGE_VERSION="1900.0.0"\nVERSION_ID="1900.0.0"\n')
         result = self.fx.run_consumer()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("release targets 2150", result.stderr)
@@ -259,13 +274,96 @@ class ConsumerTest(unittest.TestCase):
         self.assertIn("refresh", result.stderr)
         self.assertEqual(self.fx.raw("sci-10-base"), before)
 
-    def test_keeps_exactly_one_previous_cache_generation(self):
+    def test_does_not_collect_another_agents_cached_release(self):
         digests = []
         for tag in ("v1", "v2", "v3"):
             self.fx.build_release(contents(tag))
             digests.append(self.fx.release_digest())
             self.assertEqual(self.fx.run_consumer().returncode, 0)
-        self.assertEqual(self.fx.cached_generations(), sorted(digests[1:]))
+        self.assertEqual(self.fx.cached_generations(), sorted(digests))
+
+    def test_only_changed_raws_restart_their_units(self):
+        self.assertEqual(self.fx.run_consumer().returncode, 0)
+        self.fx.reset_log()
+        files = contents()
+        files["sci-10-base.raw"] = b"updated-base\n"
+        self.fx.build_release(files)
+        result = self.fx.run_consumer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("systemctl restart libvirtd.service", self.fx.calls())
+
+    def test_extensions_without_a_shim_converge(self):
+        files = {name: data for name, data in contents().items() if name.endswith(".raw")}
+        self.fx.build_release(files)
+        self.assertEqual(self.fx.run_consumer().returncode, 0)
+        self.fx.reset_log()
+        result = self.fx.run_consumer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.fx.calls(), "")
+
+    def test_required_unit_failure_blocks_the_agent_and_is_retried(self):
+        self.fx.fail_unit.touch()
+        result = self.fx.run_consumer()
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.fx.fail_unit.unlink()
+        self.fx.reset_log()
+        result = self.fx.run_consumer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("systemctl restart libvirtd.service", self.fx.calls())
+
+    def test_base_gate_uses_the_machine_image_version(self):
+        (self.fx.host / "etc/os-release").write_text('ID=gardenlinux\nVERSION_ID="13"\nIMAGE_VERSION="2150.9.0"\n')
+        result = self.fx.run_consumer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_activation_lives_in_each_chart_not_a_separate_component(self):
+        self.assertFalse((ROOT / "openstack/sci-consumer").exists())
+        nova = ROOT / "openstack/nova-hypervisor-agents/files/activate-sci-sysext.sh"
+        neutron = ROOT / "openstack/neutron-hypervisor-agents/files/activate-sci-sysext.sh"
+        self.assertEqual(nova.read_bytes(), neutron.read_bytes())
+
+    def test_agents_download_concurrently_and_activate_a_safe_union(self):
+        fixture = self.fx
+        barrier = threading.Barrier(2)
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                name = self.path.rsplit("/", 1)[-1]
+                if name in ("sci-20-compute.raw", "sci-21-network.raw"):
+                    try:
+                        barrier.wait(timeout=10)
+                    except threading.BrokenBarrierError:
+                        self.send_error(503, "agent downloads were serialized")
+                        return
+                data = (fixture.release / name).read_bytes()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *_):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}"
+        processes = []
+        for agent, extensions in (("compute", "sci-10-base sci-20-compute"),
+                                  ("network", "sci-10-base sci-21-network")):
+            process = subprocess.Popen(
+                ["bash", str(SCRIPT)],
+                env=self.fx.env(extensions=extensions, SCI_AGENT=agent, SCI_RELEASE_URL=url),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            processes.append(process)
+            self.addCleanup(lambda p=process: p.kill() if p.poll() is None else None)
+        for process in processes:
+            _, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, stderr)
+        self.assertEqual(self.fx.deployed(), ["sci-10-base.raw", "sci-20-compute.raw", "sci-21-network.raw"])
 
 
 if __name__ == "__main__":

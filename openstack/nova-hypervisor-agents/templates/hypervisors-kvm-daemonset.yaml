@@ -1,5 +1,5 @@
 {{- if not .Values.hypervisor_on_host }}
-{{- fail "hypervisor_on_host: false is no longer supported: the in-pod libvirt mode was removed because it raced the host services. Set hypervisor_on_host: true. If the host does not provide the libvirt/QEMU stack natively, set sciSysext (image, release, publicKey, extensions) to consume a signed SCI release at pod start." }}
+{{- fail "hypervisor_on_host: false is no longer supported: the in-pod libvirt mode was removed because it raced the host services. Set hypervisor_on_host: true. If the host does not provide the libvirt/QEMU stack natively, set sciSysext.release and sciSysext.publicKey to activate the agent's extensions at pod start." }}
 {{- end }}
 {{- include "sciSysext.validate" . }}
 {{- $hypervisor := merge .Values.defaults.hypervisor.kvm .Values.defaults.hypervisor.common }}
@@ -30,6 +30,9 @@ spec:
         configmap-etc-hash: {{ include (print .Template.BasePath "/etc-configmap.yaml") . | sha256sum }}
         configmap-kvm-etc-hash: {{ include "kvm_configmap" . | sha256sum }}
         secret-etc-hash: {{ include (print .Template.BasePath "/etc-secret.yaml") . | sha256sum }}
+        {{- if include "sciSysext.enabled" . }}
+        configmap-bin-hash: {{ include (print .Template.BasePath "/bin-configmap.yaml") . | sha256sum }}
+        {{- end }}
     spec:
       serviceAccountName: {{ .Values.hypervisorAgentsServiceAccountName | default .Release.Name }}
       terminationGracePeriodSeconds: {{ $hypervisor.default.graceful_shutdown_timeout | default .Values.defaults.default.graceful_shutdown_timeout | add 5 }}
@@ -77,24 +80,31 @@ spec:
         - name: DEPENDENCY_CUSTOM_RESOURCE
           value: '[{"apiVersion":"kvm.cloud.sap/v1","kind":"Hypervisor","name":"$(NODE_NAME)","fields":[{"key":".status.conditions[?(@.type==\"TLSCertificateInstalled\")].status","value":"True"}]}]'
       {{- if include "sciSysext.enabled" . }}
-      - name: sci-sysext-consumer
-        image: {{ .Values.sciSysext.image | quote }}
+      - name: activate-sci-sysext
+        image: {{ required ".Values.global.registry is missing" .Values.global.registry }}/{{ .Values.imageName }}:{{ .Values.imageVersion | required "Please set imageVersion" }}
         imagePullPolicy: IfNotPresent
+        command: [bash, /container.init/activate-sci-sysext]
         env:
           {{- include "sciSysext.env" . | nindent 10 }}
-        # Privileged on purpose: after mounting `/` at /host the consumer
+          - name: SCI_AGENT
+            value: nova-compute-kvm
+        # Privileged on purpose: after mounting `/` at /host the agent
         # mutates the host through nsenter, which needs capabilities an init
         # container does not get by default. osl's privilege stamp only covers
         # the retired standalone sci-sysext-delivery DaemonSet, not init
         # containers, and earlier live runs of this unprivileged init failed
         # with `Operation not permitted`.
         securityContext:
+          runAsUser: 0
           privileged: true
           capabilities:
             add: ["SYS_ADMIN", "SYS_PTRACE"]
           appArmorProfile:
             type: Unconfined
         volumeMounts:
+          - name: bin
+            mountPath: /container.init
+            readOnly: true
           - name: host-root
             mountPath: /host
             mountPropagation: HostToContainer

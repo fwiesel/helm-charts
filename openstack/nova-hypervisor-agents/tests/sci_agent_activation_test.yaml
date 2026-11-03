@@ -1,0 +1,52 @@
+suite: SCI activation belongs to the compute agent
+templates:
+  - templates/*.yaml
+values:
+  - ../ci/test-values.yaml
+set:
+  availability_zone: test-az
+  sciSysext.release.url: https://artifacts.example.com/sci/2150.9.0-g1234567
+  sciSysext.release.sumsDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  sciSysext.publicKey: test-public-key
+tests:
+  - it: runs the chart activation script in the existing agent image without a consumer image
+    template: templates/hypervisors-kvm-daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: activate-sci-sysext
+      - equal:
+          path: spec.template.spec.initContainers[1].image
+          value: myRegistry/loci-nova:latest
+      - equal:
+          path: spec.template.spec.initContainers[1].command
+          value: [bash, /container.init/activate-sci-sysext]
+      - contains:
+          path: spec.template.spec.initContainers[1].volumeMounts
+          content:
+            name: bin
+            mountPath: /container.init
+            readOnly: true
+      - contains:
+          path: spec.template.spec.initContainers[1].env
+          content:
+            name: SCI_EXTENSIONS
+            value: sci-10-base sci-20-compute sci-22-storage sci-40-libvirt sci-50-virt-ch sci-51-virt-qemu
+      - contains:
+          path: spec.template.spec.initContainers[1].env
+          content:
+            name: SCI_AGENT
+            value: nova-compute-kvm
+  - it: ships the activation code in the existing bin ConfigMap
+    template: templates/bin-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data.activate-sci-sysext
+          pattern: systemd-sysext
+  - it: rejects a legacy delivery image instead of silently running its entrypoint
+    template: templates/hypervisors-kvm-daemonset.yaml
+    set:
+      sciSysext.image: registry.example.com/old-delivery:latest
+    asserts:
+      - failedTemplate:
+          errorPattern: sciSysext.image is no longer used

@@ -1,4 +1,4 @@
-suite: SCI sysext consumer init container (nova-hypervisor-agents)
+suite: SCI sysext activation init container (nova-hypervisor-agents)
 templates:
   - templates/*.yaml
 values:
@@ -16,13 +16,13 @@ tests:
       - failedTemplate:
           errorPattern: "sciSysext"
 
-  - it: renders no consumer init container and no host-root volume when sciSysext is empty
+  - it: renders no activation init container and no host-root volume in trust mode
     template: templates/hypervisors-kvm-daemonset.yaml
     asserts:
       - notContains:
           path: spec.template.spec.initContainers
           content:
-            name: sci-sysext-consumer
+            name: activate-sci-sysext
           any: true
       - notContains:
           path: spec.template.spec.volumes
@@ -39,10 +39,10 @@ tests:
   - it: refuses a partially configured sciSysext block
     template: templates/hypervisors-kvm-daemonset.yaml
     set:
-      sciSysext.image: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      sciSysext.release.url: https://artifacts.example.com/sci/build
     asserts:
       - failedTemplate:
-          errorPattern: "set image, release.url, release.sumsDigest, publicKey and extensions together"
+          errorPattern: "set release.url, release.sumsDigest and publicKey together"
 
   - it: refuses a sumsDigest that is not a sha256
     template: templates/hypervisors-kvm-daemonset.yaml
@@ -65,7 +65,7 @@ tests:
       - failedTemplate:
           errorPattern: "invalid extension name"
 
-  - it: renders the consumer between kubernetes-entrypoint and nova-compute-init
+  - it: renders activation between kubernetes-entrypoint and nova-compute-init
     template: templates/hypervisors-kvm-daemonset.yaml
     values:
       - sci-sysext-values.yaml
@@ -75,22 +75,22 @@ tests:
           value: kubernetes-entrypoint
       - equal:
           path: spec.template.spec.initContainers[1].name
-          value: sci-sysext-consumer
+          value: activate-sci-sysext
       - equal:
           path: spec.template.spec.initContainers[1].image
-          value: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          value: myRegistry/loci-nova:latest
       - equal:
           path: spec.template.spec.initContainers[2].name
           value: nova-compute-init
 
-  - it: passes the release contract to the consumer
+  - it: passes the release contract to the agent activation init
     template: templates/hypervisors-kvm-daemonset.yaml
     values:
       - sci-sysext-values.yaml
     asserts:
       - equal:
           path: spec.template.spec.initContainers[1].name
-          value: sci-sysext-consumer
+          value: activate-sci-sysext
       - contains:
           path: spec.template.spec.initContainers[1].env
           content:
@@ -127,6 +127,7 @@ tests:
       - equal:
           path: spec.template.spec.initContainers[1].securityContext
           value:
+            runAsUser: 0
             privileged: true
             capabilities:
               add:
@@ -151,7 +152,7 @@ tests:
           path: spec.template.spec.hostIPC
           value: true
 
-  - it: keeps setup-nfs after the consumer
+  - it: keeps setup-nfs after activation
     template: templates/hypervisors-kvm-daemonset.yaml
     values:
       - sci-sysext-values.yaml
@@ -163,7 +164,7 @@ tests:
           value: kubernetes-entrypoint
       - equal:
           path: spec.template.spec.initContainers[1].name
-          value: sci-sysext-consumer
+          value: activate-sci-sysext
       - equal:
           path: spec.template.spec.initContainers[2].name
           value: nova-compute-init
@@ -171,7 +172,7 @@ tests:
           path: spec.template.spec.initContainers[3].name
           value: setup-nfs
 
-  - it: keeps setup-nfs when instance_nfs_share is set without a consumer
+  - it: keeps setup-nfs when instance_nfs_share is set without SCI activation
     template: templates/hypervisors-kvm-daemonset.yaml
     set:
       defaults.hypervisor.kvm.instance_nfs_share: "nfs.example.com:/exports/nova"
@@ -188,7 +189,7 @@ tests:
       - notContains:
           path: spec.template.spec.initContainers
           content:
-            name: sci-sysext-consumer
+            name: activate-sci-sysext
           any: true
 
   - it: never renders the retired standalone delivery DaemonSet

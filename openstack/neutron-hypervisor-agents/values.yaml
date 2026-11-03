@@ -57,27 +57,29 @@ ovsOnHost: true
 # on the host, and restarts the units those extensions own. It never deploys a
 # name outside `extensions`, and it never removes a name.
 #
-# All five keys are set together, or all stay empty:
+# release.url, release.sumsDigest and publicKey are set together or left empty:
 #   empty — trust mode: the host provides the stack natively and the chart
-#           renders no consumer container (byte-identical to a host-provisioned
+#           renders no activation container (byte-identical to a host-provisioned
 #           node);
-#   set   — a one-shot init container consumes the release at Pod start; an
+#   set   — this agent's init container activates its extensions at Pod start; an
 #           already converged host is a no-op verify.
 #
-# `image` is this repo's consumer image (openstack/sci-consumer), not the
-# release. `release.url` names one immutable build; `sumsDigest` pins the exact
+# The existing agent image runs files/activate-sci-sysext.sh from the bin
+# ConfigMap. There is no separate consumer image or workload.
+# `release.url` names one build; `sumsDigest` pins the exact
 # inventory, so a moved tag cannot change the bytes. Both charts on a node
 # must name the same release and sumsDigest.
 #
 # The network DaemonSets ask for: sci-10-base, sci-21-network. The nova chart
 # asks for the compute set from the same release.
 sciSysext:
-  image: ""
   release:
     url: ""
     sumsDigest: ""
   publicKey: ""
-  extensions: []
+  extensions:
+    - sci-10-base
+    - sci-21-network
 
 # Provider-bridge takeover on the primary NIC, performed by the
 # configure-host-ovs init container (templates/bin/_configure-host-ovs.tpl).

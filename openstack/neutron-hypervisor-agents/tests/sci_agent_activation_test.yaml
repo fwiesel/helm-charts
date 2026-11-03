@@ -1,0 +1,67 @@
+suite: SCI activation belongs to each network agent
+templates:
+  - templates/*.yaml
+  - templates/bin/*.tpl
+  - templates/etc/*.tpl
+values:
+  - ../ci/test-values.yaml
+set:
+  ovn.external_ids.OvnRemote: tcp:192.0.2.10:6642
+  sciSysext.release.url: https://artifacts.example.com/sci/2150.9.0-g1234567
+  sciSysext.release.sumsDigest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  sciSysext.publicKey: test-public-key
+tests:
+  - it: runs OVN activation before bridge configuration in the existing agent image
+    template: templates/daemonset-ovn-controller.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: activate-sci-sysext
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: registry.example.com/internal/loci-neutron:queens
+      - equal:
+          path: spec.template.spec.initContainers[0].command
+          value: [bash, /container.init/activate-sci-sysext]
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: configure-host-ovs
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: SCI_AGENT
+            value: neutron-ovn-controller
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: SCI_EXTENSIONS
+            value: sci-10-base sci-21-network
+  - it: runs OVS activation in its own init container with the same script and selection
+    template: templates/daemonset-openvswitch-agent.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: activate-sci-sysext
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: registry.example.com/internal/loci-neutron:queens
+      - equal:
+          path: spec.template.spec.initContainers[0].command
+          value: [bash, /container.init/activate-sci-sysext]
+      - contains:
+          path: spec.template.spec.initContainers[0].volumeMounts
+          content:
+            name: bin
+            mountPath: /container.init
+            readOnly: true
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: SCI_AGENT
+            value: neutron-openvswitch-agent
+  - it: ships the activation code in the existing bin ConfigMap
+    template: templates/configmap-bin.yaml
+    asserts:
+      - matchRegex:
+          path: data.activate-sci-sysext
+          pattern: systemd-sysext

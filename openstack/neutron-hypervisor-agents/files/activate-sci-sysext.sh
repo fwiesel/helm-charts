@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# sci-consumer: deploy one signed SCI systemd-sysext release into the host.
+# SPDX-License-Identifier: Apache-2.0
+# Activate this agent's SCI systemd extensions from one signed release.
 #
 # One pass, then exit. The caller runs this as a privileged init container in
-# the DaemonSet that needs the extensions. The contract is in README.md.
+# the DaemonSet that needs the extensions. The chart supplies this script in
+# its bin ConfigMap; the existing agent image provides the tools.
 #
 # This is a consumer of the artifact published by gardenlinux-sci. It is not
 # the delivery step from that repository, and it does not depend on it.
@@ -17,20 +19,21 @@ SCI_EXTENSIONS=${SCI_EXTENSIONS:-}
 SCI_STATE_DIR=${SCI_STATE_DIR:-}
 SCI_DEADLINE=${SCI_DEADLINE:-900}
 SCI_NSENTER=${SCI_NSENTER:-1}
+SCI_AGENT=${SCI_AGENT:-}
 
 STATE_DIR=${SCI_STATE_DIR:-$HOST_ROOT/var/lib/sci-sysext}
 
 CLEANUP=()
-declare -A SUM=() LISTED=() UNITS=()
+declare -A SUM=() LISTED=() UNITS=() RAW_CHANGED=() SHIM_CHANGED=()
 MANIFEST_NAMES=()
 SELECTED=()
 WANTED=()
-PREVIOUS_DIGEST=
+REQUESTED=()
 
-log() { printf '[sci-consumer] %s\n' "$*"; }
-warn() { printf '[sci-consumer] warning: %s\n' "$*" >&2; }
+log() { printf '[activate-sci-sysext:%s] %s\n' "$SCI_AGENT" "$*"; }
+warn() { printf '[activate-sci-sysext:%s] warning: %s\n' "$SCI_AGENT" "$*" >&2; }
 die() {
-    printf '[sci-consumer] error: %s\n' "$*" >&2
+    printf '[activate-sci-sysext:%s] error: %s\n' "$SCI_AGENT" "$*" >&2
     exit 1
 }
 
@@ -59,18 +62,21 @@ validate_config() {
     [ -n "$SCI_RELEASE_URL" ] || die "SCI_RELEASE_URL is empty"
     case $SCI_RELEASE_URL in
         http://* | https://* | file://*) ;;
-        *) die "SCI_RELEASE_URL must start with http://, https:// or file://: $SCI_RELEASE_URL" ;;
+        *) die "SCI_RELEASE_URL must start with http://, https:// or file://" ;;
     esac
     if [ -n "$SCI_SUMS_DIGEST" ]; then
         [[ $SCI_SUMS_DIGEST =~ ^[0-9a-f]{64}$ ]] \
             || die "SCI_SUMS_DIGEST must be 64 lowercase hex characters"
     fi
     [ -n "$SCI_EXTENSIONS" ] || die "SCI_EXTENSIONS is empty"
+    read -r -a REQUESTED <<<"${SCI_EXTENSIONS//$'\n'/ }"
     local name
-    for name in $SCI_EXTENSIONS; do
+    for name in "${REQUESTED[@]}"; do
         [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
             || die "SCI_EXTENSIONS carries an invalid extension name: '$name'"
     done
+    [[ $SCI_AGENT =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+        || die "SCI_AGENT must be a safe agent name"
     case $SCI_NSENTER in
         0 | 1) ;;
         *) die "SCI_NSENTER must be 0 or 1: $SCI_NSENTER" ;;
@@ -80,14 +86,10 @@ validate_config() {
 }
 
 prepare_state() {
+    umask 077
     mkdir -p -- "$STATE_DIR/cache" \
         || die "cannot create the state directory: $STATE_DIR"
     export LC_ALL=C
-    exec 9>>"$STATE_DIR/lock" \
-        || die "cannot open the lock file: $STATE_DIR/lock"
-    flock -w "$(remaining)" 9 \
-        || die "timed out waiting for the host lock: $STATE_DIR/lock"
-
     WORK=$(mktemp -d "$STATE_DIR/.fetch.XXXXXX") \
         || die "cannot create a temporary directory under $STATE_DIR"
     CLEANUP+=("$WORK")
@@ -105,17 +107,18 @@ prepare_state() {
 }
 
 run_host() {
+    check_deadline "host command"
     if [ "$SCI_NSENTER" -eq 1 ]; then
-        nsenter -t 1 -m -- "$@"
+        timeout --foreground "$(remaining)" nsenter -t 1 -m -r -w -- "$@"
     else
-        "$@"
+        timeout --foreground "$(remaining)" "$@"
     fi
 }
 
 run_sysext_refresh() {
     if [ "$SCI_NSENTER" -eq 1 ] \
         && [ -x "$HOST_ROOT/usr/lib/systemd/systemd-sysext" ]; then
-        nsenter -t 1 -m -- /usr/lib/systemd/systemd-sysext refresh
+        run_host /usr/lib/systemd/systemd-sysext refresh
     else
         run_host systemd-sysext refresh
     fi
@@ -128,11 +131,12 @@ sha256_of() {
 }
 
 fetch_get() { # <inventory name> <destination>
+    check_deadline "download"
     curl -fsSL --proto '=https,http,file' \
         --connect-timeout 10 --max-time "$(remaining)" \
-        --retry 2 --retry-connrefused \
+        --retry 2 --retry-connrefused --retry-max-time "$(remaining)" \
         -o "$2" -- "$SCI_RELEASE_URL/$1" \
-        || die "cannot fetch $SCI_RELEASE_URL/$1"
+        || die "cannot fetch release file $1"
 }
 
 verify_inventory() {
@@ -180,7 +184,7 @@ parse_inventory() {
 }
 
 parse_manifest() { # <path>
-    local path=$1 line name rest lineno=0
+    local path=$1 line name rest unit lineno=0
     local base=
     while IFS= read -r line || [ -n "$line" ]; do
         lineno=$((lineno + 1))
@@ -195,18 +199,20 @@ parse_manifest() { # <path>
                 continue
                 ;;
             REMOVE=*)
-                die "$path carries '$line': this consumer implements no tombstones; remove '$line' from the release manifest, or delete the extension from the host explicitly"
+                die "$path contains a removal directive; this agent does not remove host extensions"
                 ;;
         esac
-        name=${line%% *}
-        rest=
-        if [ "$name" != "$line" ]; then
-            rest=${line#* }
-        fi
+        read -r name rest <<<"$line"
         [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
             || die "$path line $lineno has an invalid extension name: $name"
         [ -z "${UNITS[$name]+set}" ] \
             || die "$path lists '$name' twice (line $lineno)"
+        local -a unit_names=()
+        read -r -a unit_names <<<"$rest"
+        for unit in "${unit_names[@]}"; do
+            [[ $unit =~ ^[A-Za-z0-9][A-Za-z0-9_.@:-]*\.(service|socket|target)$ ]] \
+                || die "$path lists an invalid restart unit: $unit"
+        done
         MANIFEST_NAMES+=("$name")
         UNITS[$name]=$rest
     done <"$path"
@@ -217,11 +223,13 @@ parse_manifest() { # <path>
 
 select_extensions() {
     local token
-    for token in $SCI_EXTENSIONS; do
+    local -A requested=()
+    for token in "${REQUESTED[@]}"; do
         [ -n "${UNITS[$token]+set}" ] \
             || die "SCI_EXTENSIONS lists '$token', which the release manifest does not deploy"
         [ -n "${LISTED[$token.raw]+set}" ] \
             || die "SCI_EXTENSIONS lists '$token', which SHA256SUMS does not carry"
+        requested[$token]=1
     done
 
     WANTED=(extensions.manifest)
@@ -229,10 +237,7 @@ select_extensions() {
 
     # Manifest order, not request order: the manifest is the merge order.
     for token in "${MANIFEST_NAMES[@]}"; do
-        case " $SCI_EXTENSIONS " in
-            *" $token "*) ;;
-            *) continue ;;
-        esac
+        [ -n "${requested[$token]+set}" ] || continue
         SELECTED+=("$token")
         WANTED+=("$token.raw")
         if [ -n "${LISTED[$token-activation.service]+set}" ]; then
@@ -250,7 +255,10 @@ download() {
         if [ -f "$dest" ] && [ "$(sha256_of "$dest")" = "${SUM[$name]}" ]; then
             continue
         fi
-        part=$dest.part
+        # Downloads stay concurrent. A unique temporary file and an atomic
+        # rename make duplicate fetches safe without locking the whole pass.
+        part=$(mktemp "$CACHE/.$name.XXXXXX")
+        CLEANUP+=("$part")
         fetch_get "$name" "$part"
         actual=$(sha256_of "$part") \
             || die "cannot hash the downloaded $name"
@@ -293,18 +301,21 @@ preflight_anchor() {
         fi
     done
     [ "$found" -eq 1 ] \
-        || die "no certificate in $dir matches the release signing key: install the release verity-run.crt there, or bake it into the base image"
-    log "host trust anchor matches the release certificate"
+        || die "no certificate in $dir matches the release signing key; provision the host trust anchor before starting this agent"
+    log "matching host public key found; systemd-sysext will verify the raws at merge"
 }
 
 check_base() {
     local os_release=$HOST_ROOT/etc/os-release
     [ -r "$os_release" ] || die "cannot read $os_release"
     local version
-    version=$(sed -n 's/^VERSION_ID="\{0,1\}\([0-9][0-9.]*\)"\{0,1\}$/\1/p' "$os_release" | head -n 1)
-    [ -n "$version" ] || die "$os_release carries no VERSION_ID"
+    version=$(sed -n 's/^IMAGE_VERSION="\{0,1\}\([0-9][0-9.]*\)"\{0,1\}$/\1/p' "$os_release" | head -n 1)
+    if [ -z "$version" ]; then
+        version=$(sed -n 's/^VERSION_ID="\{0,1\}\([0-9][0-9.]*\)"\{0,1\}$/\1/p' "$os_release" | head -n 1)
+    fi
+    [ -n "$version" ] || die "$os_release carries no machine image version"
     case $version in
-        "$TARGET_BASE".*) ;;
+        "$TARGET_BASE" | "$TARGET_BASE".*) ;;
         *) die "host base is $version, but the release targets $TARGET_BASE" ;;
     esac
 }
@@ -342,13 +353,15 @@ restore_previous() {
 
 deploy_file() { # <source> <destination>; returns 1 when the file changed
     local src=$1 dest=$2 tmp
+    [ ! -L "$dest" ] || die "refusing to replace a host symlink: $dest"
     if [ -f "$dest" ] && cmp -s -- "$src" "$dest"; then
         return 1
     fi
     save_previous "$dest"
     mkdir -p -- "$(dirname "$dest")" \
         || die "cannot create $(dirname "$dest")"
-    tmp=$dest.tmp.$$
+    tmp=$(mktemp "$dest.XXXXXX")
+    CLEANUP+=("$tmp")
     cp -- "$src" "$tmp" \
         || die "cannot write $dest"
     chmod 0644 "$tmp"
@@ -357,41 +370,84 @@ deploy_file() { # <source> <destination>; returns 1 when the file changed
     return 0
 }
 
+plan_activation() {
+    # Only the host-wide merge needs serialization. Independent agents may
+    # download and verify their selections concurrently.
+    exec 9>>"$STATE_DIR/lock"
+    flock -w "$(remaining)" 9 || die "timed out waiting for the host activation lock"
+    PENDING=$STATE_DIR/pending/$SCI_AGENT
+    local name src dest wants kind
+    for name in "${SELECTED[@]}"; do
+        RAW_CHANGED[$name]=0
+        SHIM_CHANGED[$name]=0
+        src=$CACHE/$name.raw
+        dest=$HOST_ROOT/var/lib/extensions/$name.raw
+        if ! cmp -s -- "$src" "$dest"; then
+            RAW_CHANGED[$name]=1
+        fi
+        src=$CACHE/$name-activation.service
+        dest=$HOST_ROOT/etc/systemd/system/$name-activation.service
+        wants=$HOST_ROOT/etc/systemd/system/multi-user.target.wants/$name-activation.service
+        if [ -f "$src" ] && { ! cmp -s -- "$src" "$dest" || { [ ! -e "$wants" ] && [ ! -L "$wants" ]; }; }; then
+            SHIM_CHANGED[$name]=1
+        fi
+    done
+    # This is a per-agent retry marker, not an ownership/removal ledger.
+    if [ -f "$PENDING" ]; then
+        while read -r kind name; do
+            [ -n "${RAW_CHANGED[$name]+set}" ] \
+                || die "pending activation names '$name', which this agent no longer selects"
+            case $kind in
+                raw) RAW_CHANGED[$name]=1 ;;
+                shim) SHIM_CHANGED[$name]=1 ;;
+                *) die "invalid pending activation record" ;;
+            esac
+        done <"$PENDING"
+    fi
+    ACTIVATION_NEEDED=0
+    for name in "${SELECTED[@]}"; do
+        if [ "${RAW_CHANGED[$name]}" -eq 1 ] || [ "${SHIM_CHANGED[$name]}" -eq 1 ]; then
+            ACTIVATION_NEEDED=1
+        fi
+    done
+    [ "$ACTIVATION_NEEDED" -eq 1 ] || return 0
+    mkdir -p -- "$STATE_DIR/pending"
+    local marker
+    marker=$(mktemp "$STATE_DIR/pending/.pending.XXXXXX")
+    CLEANUP+=("$marker")
+    for name in "${SELECTED[@]}"; do
+        if [ "${RAW_CHANGED[$name]}" -eq 1 ]; then
+            printf 'raw %s\n' "$name" >>"$marker"
+        fi
+        if [ "${SHIM_CHANGED[$name]}" -eq 1 ]; then
+            printf 'shim %s\n' "$name" >>"$marker"
+        fi
+    done
+    # Write before deployment: a killed or failed pass cannot silently skip
+    # activation merely because the next pass finds identical host files.
+    mv -f -- "$marker" "$PENDING"
+}
+
 deploy() {
-    local name changed=0
+    local name
     for name in "${SELECTED[@]}"; do
         if deploy_file "$CACHE/$name.raw" \
             "$HOST_ROOT/var/lib/extensions/$name.raw"; then
-            changed=1
             log "deployed $name.raw"
         fi
         local shim=$CACHE/$name-activation.service
         if [ -f "$shim" ]; then
             if deploy_file "$shim" \
                 "$HOST_ROOT/etc/systemd/system/$name-activation.service"; then
-                changed=1
                 log "deployed $name-activation.service"
             fi
         fi
     done
-    DEPLOY_CHANGED=$changed
-}
-
-activation_needed() {
-    local name wants
-    [ "$DEPLOY_CHANGED" -eq 1 ] && return 0
-    for name in "${SELECTED[@]}"; do
-        wants=$HOST_ROOT/etc/systemd/system/multi-user.target.wants/$name-activation.service
-        if [ ! -e "$wants" ] && [ ! -L "$wants" ]; then
-            return 0
-        fi
-    done
-    return 1
 }
 
 activate() {
     check_deadline "activation"
-    if ! activation_needed; then
+    if [ "$ACTIVATION_NEEDED" -eq 0 ]; then
         log "host already converged; nothing to activate"
         return 0
     fi
@@ -401,52 +457,34 @@ activate() {
 
     if ! run_sysext_refresh; then
         restore_previous
+        run_host systemctl daemon-reload || warn "daemon-reload failed after restoring the previous files"
         if run_sysext_refresh; then
             die "systemd-sysext refresh rejected the new set; the previous set was restored"
         fi
         die "systemd-sysext refresh rejected the new set, and restoring the previous set did not help"
     fi
+    run_host systemctl reload dbus.service || die "dbus reload failed after the sysext merge"
     log "merged the selected extensions"
 
     local name units
+    local -a restart_units=()
     for name in "${SELECTED[@]}"; do
         units=${UNITS[$name]}
-        if [ -n "$units" ]; then
-            # shellcheck disable=SC2086
-            if ! run_host systemctl restart $units; then
-                warn "unit restart failed for $name: $units"
-            fi
+        if [ "${RAW_CHANGED[$name]}" -eq 1 ] && [ -n "$units" ]; then
+            read -r -a restart_units <<<"$units"
+            run_host systemctl restart "${restart_units[@]}" \
+                || die "required unit restart failed for $name: $units"
         fi
         if [ -f "$HOST_ROOT/etc/systemd/system/$name-activation.service" ]; then
             run_host systemctl enable "$name-activation.service" >/dev/null 2>&1 \
-                || warn "cannot enable $name-activation.service"
-            run_host systemctl restart "$name-activation.service" >/dev/null 2>&1 \
-                || warn "cannot restart $name-activation.service"
+                || die "cannot enable $name-activation.service"
+            if [ "${RAW_CHANGED[$name]}" -eq 1 ] || [ "${SHIM_CHANGED[$name]}" -eq 1 ]; then
+                run_host systemctl restart "$name-activation.service" \
+                    || die "cannot activate $name-activation.service"
+            fi
         fi
     done
-}
-
-note_release() {
-    PREVIOUS_DIGEST=
-    if [ -f "$STATE_DIR/release-digest" ]; then
-        PREVIOUS_DIGEST=$(cat "$STATE_DIR/release-digest")
-    fi
-    if [ -n "$PREVIOUS_DIGEST" ] && [ "$PREVIOUS_DIGEST" != "$SUMS_SHA" ]; then
-        warn "this node ran release $PREVIOUS_DIGEST and now runs $SUMS_SHA"
-    fi
-    printf '%s\n' "$SUMS_SHA" >"$STATE_DIR/release-digest" \
-        || die "cannot record the release digest"
-}
-
-collect_garbage() {
-    local dir
-    for dir in "$STATE_DIR"/cache/*; do
-        [ -d "$dir" ] || continue
-        case $(basename "$dir") in
-            "$SUMS_SHA" | "$PREVIOUS_DIGEST") continue ;;
-        esac
-        rm -rf -- "$dir"
-    done
+    rm -f -- "$PENDING"
 }
 
 main() {
@@ -455,6 +493,8 @@ main() {
     prepare_state
     verify_inventory
     parse_inventory
+    [ -n "${LISTED[extensions.manifest]+set}" ] || die "signed inventory has no extensions.manifest"
+    [ -n "${LISTED[verity-run.crt]+set}" ] || die "signed inventory has no verity-run.crt"
     fetch_get extensions.manifest "$WORK/extensions.manifest"
     [ "$(sha256_of "$WORK/extensions.manifest")" = "${SUM[extensions.manifest]}" ] \
         || die "extensions.manifest does not match its SHA256SUMS line"
@@ -466,10 +506,9 @@ main() {
     download
     preflight_anchor
     check_base
+    plan_activation
     deploy
     activate
-    note_release
-    collect_garbage
     log "done: ${#SELECTED[@]} extension(s) selected"
 }
 

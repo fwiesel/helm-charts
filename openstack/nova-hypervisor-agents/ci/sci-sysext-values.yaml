@@ -28,10 +28,9 @@ defaults:
         nodeSelector:
           species: hypervisor
 
-# Render-only example: the consumer is enabled with placeholder values. The
+# Render-only example: agent activation is enabled with placeholder values. The
 # URL and digest name no real build, so this is not an installable release.
 sciSysext:
-  image: "registry.example.com/sci-consumer@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
   release:
     url: "https://github.com/gardenlinux/gardenlinux-sci/releases/download/2150.9.0-g00a1df9"
     sumsDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
