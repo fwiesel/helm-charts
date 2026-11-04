@@ -235,12 +235,23 @@ class ConsumerTest(unittest.TestCase):
         self.assertIn("does not match its SHA256SUMS line", result.stderr)
         self.assertEqual(self.fx.deployed(), [])
 
-    def test_missing_anchor_is_refused(self):
-        (self.fx.host / "usr/lib/verity.d/verity.crt").unlink()
+    def test_missing_anchor_warns_and_defers_to_the_merge(self):
+        shutil.rmtree(self.fx.host / "usr/lib/verity.d")
         result = self.fx.run_consumer()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no certificate", result.stderr)
-        self.assertEqual(self.fx.deployed(), [])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no sysext trust anchor", result.stderr)
+        self.assertEqual(self.fx.deployed(), ["sci-10-base.raw", "sci-20-compute.raw"])
+
+    def test_unmatched_anchor_warns_and_defers_to_the_merge(self):
+        other_cert = self.fx.keys / "other.crt"
+        other_key = self.fx.keys / "other-anchor.key"
+        run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+             "-subj", "/CN=unrelated-anchor", "-keyout", other_key, "-out", other_cert])
+        shutil.copy(other_cert, self.fx.host / "usr/lib/verity.d/verity.crt")
+        result = self.fx.run_consumer()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("matches the release signing key", result.stderr)
+        self.assertEqual(self.fx.deployed(), ["sci-10-base.raw", "sci-20-compute.raw"])
 
     def test_wrong_base_line_is_refused(self):
         (self.fx.host / "etc/os-release").write_text('ID=gardenlinux\nIMAGE_VERSION="1900.0.0"\nVERSION_ID="1900.0.0"\n')

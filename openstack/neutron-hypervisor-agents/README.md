@@ -72,8 +72,9 @@ required restart blocks the agent and is retried at the next init. Downloads
 can run concurrently, while the node-global merge is protected by a host lock.
 Verified files are cached under `/var/lib/sci-sysext/cache/<sums-digest>`, and
 retry markers are per agent. This chart removes neither deployed extensions
-nor another agent's cache. A matching host verity trust anchor must be
-provisioned separately; the script does not change host trust.
+nor another agent's cache. The script compares the host's verity trust anchors
+with the release certificate and warns on a mismatch; it never changes host
+trust, and systemd-sysext remains the enforcement point at merge.
 
 Roll out release changes only in a maintenance window, not during a running
 workload test. Unit tests use signed fixtures and stub host commands. Live

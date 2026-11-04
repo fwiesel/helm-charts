@@ -287,9 +287,14 @@ preflight_anchor() {
     want=$(cert_pubkey_sha "$cert") || die "cannot read the release certificate $cert"
     [ -n "$want" ] || die "cannot read the release certificate $cert"
 
+    # The anchor check is a diagnostic, not a gate: live Garden Linux hosts
+    # merged run-local-key CI raws without a matching anchor, so the merge
+    # outcome is systemd-sysext's decision. A refused refresh rolls back.
     local dir=$HOST_ROOT/usr/lib/verity.d
-    [ -d "$dir" ] \
-        || die "$dir does not exist: the base image carries no sysext trust anchor"
+    if [ ! -d "$dir" ]; then
+        warn "$dir does not exist: the base image carries no sysext trust anchor; systemd-sysext decides at merge"
+        return 0
+    fi
 
     local found=0 candidate fingerprint
     for candidate in "$dir"/*.crt; do
@@ -300,8 +305,10 @@ preflight_anchor() {
             break
         fi
     done
-    [ "$found" -eq 1 ] \
-        || die "no certificate in $dir matches the release signing key; provision the host trust anchor before starting this agent"
+    if [ "$found" -eq 0 ]; then
+        warn "no certificate in $dir matches the release signing key; if the raws are verity-signed, systemd-sysext refuses the merge and this pass rolls back"
+        return 0
+    fi
     log "matching host public key found; systemd-sysext will verify the raws at merge"
 }
 

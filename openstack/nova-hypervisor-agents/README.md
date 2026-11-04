@@ -27,9 +27,14 @@ root directory. Downloads stay concurrent; a host lock protects the node-wide
 merge and activation. The cache is shared, but extensions and cache entries
 are not automatically removed.
 
-Provision the verity trust anchor separately. Change the release only in a
-maintenance window, between Ralph runs. Instance NFS initialization remains
-enabled whenever `instance_nfs_share` is set, independently of SCI activation.
+The agent compares the host's verity trust anchors with the release
+certificate and warns on a mismatch; it never changes host trust, and
+systemd-sysext remains the enforcement point at merge. A refused merge rolls
+the deployed files back and fails the init.
+
+Change the release only in a maintenance window, between Ralph runs. Instance
+NFS initialization remains enabled whenever `instance_nfs_share` is set,
+independently of SCI activation.
 
 `helm unittest` covers the rendered init order, privileges, script packaging
 and inputs. `ci/test_sci_activation.py` tests both charts' identical activation
